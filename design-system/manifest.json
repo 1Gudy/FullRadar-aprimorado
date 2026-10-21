@@ -1,0 +1,10 @@
+{
+  "name": "fullradar",
+  "version": "2.0.1",
+  "description": "Design system semântico para o popup da extensão FullRadar.",
+  "source": "Pulso — opção 2 escolhida em 18/10/2026",
+  "files": {
+    "design": "DESIGN.md",
+    "tokens": "tokens.css"
+  }
+}

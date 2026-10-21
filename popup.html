@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FullRadar</title>
+  <link rel="stylesheet" href="design-system/tokens.css"><link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<main class="app-shell">
+  <header class="brand-row">
+    <img class="brand-mark" src="icons/icon128.png" alt="" width="40" height="40"><h1>FullRadar</h1>
+    <button id="openSettings" class="icon-button settings-button" type="button" aria-label="Abrir opções avançadas" aria-controls="advancedOptions" aria-expanded="false"><span class="icon i-settings" aria-hidden="true"></span></button>
+  </header>
+  <section class="page-state" id="pageState" aria-live="polite" role="status">
+    <span class="state-dot" aria-hidden="true"></span><span id="pageStateText">Verificando esta aba…</span>
+    <span id="shipmentDetected" class="shipment-detected">Identificando envio…</span>
+  </section>
+  <section class="monitor" id="monitorPanel" aria-label="Andamento da busca">
+    <div class="monitor-main"><strong id="monitorClock" class="monitor-clock" aria-hidden="true">—</strong><div class="monitor-copy"><h2 id="monitorTitle">Escolha suas datas</h2><p id="monitorInterval">Para começar a busca</p></div></div>
+    <div id="cadenceProgress" class="cadence-progress" hidden>
+      <progress id="stabilityProgress" max="20" value="0" aria-label="Verificações estáveis"></progress>
+      <div class="progress-copy"><span id="stabilityText"></span><span id="nextIntervalText"></span></div>
+    </div>
+    <p id="monitorMessage" class="monitor-message"></p>
+  </section>
+  <section class="date-panel" aria-labelledby="datesHeading">
+    <div class="section-heading"><span class="icon i-calendar" aria-hidden="true"></span><div><h2 id="datesHeading">Suas datas preferidas</h2><p id="datesSummary">Escolha um período</p></div><button id="editDates" type="button" class="edit-dates" aria-label="Editar datas" hidden>Editar</button></div>
+    <div class="mode-switch" role="group" aria-label="Modo de escolha das datas">
+      <button class="mode-button is-active" type="button" data-mode="range" aria-pressed="true">Período</button><button class="mode-button" type="button" data-mode="specific" aria-pressed="false">Datas em ordem</button>
+    </div>
+    <div id="specificFields" class="field-group" hidden>
+      <div id="selectedDates" class="selected-dates"></div>
+      <details><summary>Digitar datas (opcional)</summary><label for="dates">Uma data por linha, em ordem de preferência</label><textarea id="dates" rows="3" placeholder="DD/MM/AAAA&#10;DD/MM/AAAA" spellcheck="false"></textarea></details>
+    </div>
+    <div id="rangeFields" class="date-range field-group">
+      <div><span>De</span><input id="startDate" type="hidden"><button id="startDateButton" class="date-choice" type="button" aria-label="Escolher data inicial">Selecionar</button></div>
+      <div><span>Até</span><input id="endDate" type="hidden"><button id="endDateButton" class="date-choice" type="button" aria-label="Escolher data final">Selecionar</button></div>
+    </div>
+    <div class="preference-calendar" aria-label="Calendário de preferências">
+      <div class="calendar-heading">
+        <button id="previousMonth" class="icon-button" type="button" aria-label="Mês anterior"><span class="icon i-chevron-left" aria-hidden="true"></span></button>
+        <strong id="calendarMonth" aria-live="polite"></strong>
+        <button id="nextMonth" class="icon-button" type="button" aria-label="Próximo mês"><span class="icon i-chevron-right" aria-hidden="true"></span></button>
+      </div>
+      <div class="calendar-weekdays" aria-hidden="true"><span>Dom</span><span>Seg</span><span>Ter</span><span>Qua</span><span>Qui</span><span>Sex</span><span>Sáb</span></div>
+      <div id="calendarDays" class="calendar-days" role="group" aria-label="Dias do mês"></div>
+    </div>
+    <p class="field-hint" id="calendarHint"></p><p class="sr-only" id="rangeSummary" hidden></p><p id="draftStatus" class="sr-only" role="status"></p>
+    <p id="pendingChanges" class="pending-changes" hidden>Preferências salvas. A busca atual só muda quando você aplicar.</p>
+  </section>
+  <label class="confirm-row" for="autoConfirm">
+    <span class="icon i-bell" aria-hidden="true"></span>
+    <span class="confirm-copy"><strong>Confirmação automática</strong><small id="confirmDescription">Desligada: só avisa ao encontrar.</small></span>
+    <input id="autoConfirm" type="checkbox" role="switch" aria-describedby="confirmDescription"><span class="check-ui" aria-hidden="true"></span>
+  </label>
+  <div id="actionMessage" class="action-message" role="status" aria-live="polite"></div>
+  <section class="actions primary-actions" aria-label="Controlar busca">
+    <button id="startActive" class="button button-primary" type="button"><span class="icon i-radar" aria-hidden="true"></span><span id="startActiveLabel">Iniciar busca nesta aba</span></button>
+    <button id="resumeSearch" class="button button-primary" type="button" hidden><span class="icon i-player-play" aria-hidden="true"></span>Retomar busca nesta aba</button>
+    <button id="stopActive" class="button button-primary" type="button" hidden><span class="icon i-player-stop" aria-hidden="true"></span>Parar busca</button>
+  </section>
+  <details class="advanced-panel" id="advancedOptions">
+    <summary><span class="icon i-adjustments" aria-hidden="true"></span><span>Opções avançadas</span><span class="icon i-chevron-down" aria-hidden="true"></span></summary>
+    <div class="advanced-content">
+      <section class="advanced-section">
+        <div class="interval-heading"><div><h2>Frequência de verificação</h2><p>Menor intervalo desejado entre as leituras.</p></div><output id="intervalOutput" for="interval">15 s</output></div>
+        <input id="interval" class="range-input" type="range" min="15" max="300" step="15" value="15" aria-label="Intervalo de atualização">
+        <div class="range-labels"><span>15 segundos</span><span>5 minutos</span></div><p class="field-hint">Erros aumentam a espera; verificações estáveis reduzem aos poucos. Abas suspensas podem atrasar.</p>
+        <div class="refresh-counter" aria-live="polite" role="status"><strong id="refreshCountdown">Inicie uma busca para acompanhar a atualização.</strong><small id="refreshDetail">O tempo pode variar quando o computador estiver suspenso.</small></div>
+      </section>
+      <section id="telegramPanel" class="advanced-section telegram-panel" hidden aria-live="polite">
+        <div class="telegram-heading"><h2>Telegram</h2><span id="telegramBadge" class="telegram-badge">desconectado</span></div>
+        <p id="telegramDescription" class="telegram-description">Receba uma mensagem quando o agendamento for confirmado.</p><p id="telegramMessage" class="telegram-message" role="status"></p>
+        <div class="telegram-actions">
+          <button id="telegramConnect" class="button button-secondary" type="button">Conectar Telegram</button>
+          <button id="telegramOpenBot" class="button button-secondary" type="button" hidden>Abrir bot no Telegram</button>
+          <button id="telegramCheck" class="button button-quiet" type="button" hidden>Já iniciei · verificar</button>
+          <button id="telegramDisconnect" class="button button-quiet" type="button" hidden>Desconectar Telegram</button>
+        </div>
+      </section>
+      <section class="search-list advanced-section" id="searchList" hidden><div class="list-heading"><h2>Buscas neste navegador</h2><span id="searchCount">0</span></div><div id="searchRows"></div></section>
+      <section class="advanced-section all-tabs-section"><h2>Várias abas</h2><p>Cada aba usa seu próprio envio.</p><div class="actions advanced-actions"><button id="startAll" class="button button-secondary" type="button">Iniciar em todas as abas compatíveis</button><button id="stopAll" class="button button-quiet" type="button">Parar todas as buscas</button></div></section>
+      <section class="diagnostics advanced-section"><details id="errorLogDetails">
+        <summary><span>Histórico de erros</span><span class="diagnostic-count" id="errorLogCount">0</span></summary><p class="diagnostic-note">Salvo neste navegador. Baixe para compartilhar.</p><p class="diagnostic-empty" id="errorLogEmpty">Nenhum erro registrado.</p><div class="diagnostic-rows" id="errorLogRows"></div><button id="exportErrorLog" class="export-button button button-secondary" type="button" disabled>Baixar histórico (.json)</button>
+      </details></section>
+    </div>
+  </details>
+  <footer><span>FullRadar</span><span>v0.3.6</span></footer>
+</main>
+<script src="core.js"></script><script src="telegram-config.js"></script><script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "name": "fullradar",
+  "version": "0.3.6",
+  "private": true,
+  "description": "Monitor local de disponibilidade de coleta Full",
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "check": "node --check core.js && node --check dom-adapter.js && node --check content.js && node --check background.js && node --check scheduler.js && node --check popup.js",
+    "preview": "node tools/preview.cjs",
+    "preview:recovery": "node tools/recovery-preview.cjs"
+  },
+  "devDependencies": {
+    "@fontsource/inter": "^5.3.0",
+    "@tabler/icons": "^3.49.0",
+    "jsdom": "^29.1.1",
+    "sharp": "^0.35.5"
+  }
+}

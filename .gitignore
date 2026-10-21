@@ -1,0 +1,16 @@
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+node_modules/
+dist/
+.idea/
+
+# Internal project notes and operation records
+AGENTS.md
+design-qa.md
+docs/CONTINUIDADE.md
+docs/INCIDENTE-*.md
+docs/operacao-*.md
+docs/README-*.md
