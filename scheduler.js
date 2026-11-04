@@ -104,6 +104,18 @@ async function stopOne(tabId) {
     return true;
   });
 }
+// Mudar a frequência não reinicia a busca: vale a partir da próxima espera.
+async function updateInterval(tabId, seconds) {
+  return serial(tabId, async () => {
+    const search = await readSearch(tabId);
+    if (!search) return { ok: false, error: "Não há busca nesta aba." };
+    search.config.intervalSeconds = C.intervalSeconds(seconds);
+    if (search.status !== "monitoring") { await saveSearch(tabId, search); return { ok: true }; }
+    await schedule(tabId, search, search.config.intervalSeconds);
+    await sendToTab(tabId, { type: "RESCHEDULE", searchId: search.id, nextRefreshAt: search.nextRefreshAt });
+    return { ok: true, nextRefreshAt: search.nextRefreshAt };
+  });
+}
 async function getOverview() {
   const [tabs, active, searches, saved] = await Promise.all([chrome.tabs.query({}), chrome.tabs.query({ active: true, currentWindow: true }), readSearches(), chrome.storage.local.get([LAST_CONFIG_KEY, ERROR_LOGS_KEY])]);
   const rows = await Promise.all(tabs.filter(t => C.isMarketplaceUrl(t.url)).map(async tab => {
@@ -111,7 +123,7 @@ async function getOverview() {
     return { id: tab.id, title: tab.title, url: tab.url, supportedPage: Boolean(page?.schedulePage), schedulePage: Boolean(page?.schedulePage), recoveryStep: page?.recoveryStep || "", pageMessage: page?.message || "Atualize a aba para carregar o monitor.", shipmentId: page?.shipmentId || "", search: searches[String(tab.id)] || null };
   }));
   const current = rows.find(t => t.id === active[0]?.id);
-  return { activeTabId: active[0]?.id, activeTabTitle: active[0]?.title, activeTabUrl: active[0]?.url, activeSupportedPage: Boolean(current?.supportedPage), activeSchedulePage: Boolean(current?.schedulePage), activeRecoveryStep: current?.recoveryStep || "", activePageMessage: current?.pageMessage, tabs: rows, lastConfig: saved[LAST_CONFIG_KEY] || null, errorLog: saved[ERROR_LOGS_KEY] || [] };
+  return { version: chrome.runtime.getManifest().version, activeTabId: active[0]?.id, activeTabTitle: active[0]?.title, activeTabUrl: active[0]?.url, activeSupportedPage: Boolean(current?.supportedPage), activeSchedulePage: Boolean(current?.schedulePage), activeRecoveryStep: current?.recoveryStep || "", activePageMessage: current?.pageMessage, tabs: rows, lastConfig: saved[LAST_CONFIG_KEY] || null, errorLog: saved[ERROR_LOGS_KEY] || [] };
 }
 async function handleContentEvent(message, sender) {
   const tabId = sender.tab?.id;
@@ -262,6 +274,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       return { ok: results.some(r => r.ok), results };
     }
     if (message.type === "STOP_SEARCH") return { ok: await stopOne(message.tabId) };
+    if (message.type === "SET_INTERVAL") return updateInterval(message.tabId, message.intervalSeconds);
     if (message.type === "STOP_ALL") { for (const id of Object.keys(await readSearches())) await stopOne(Number(id)); return { ok: true }; }
     if (message.type === "RESUME_SEARCH") {
       const prior = await readSearch(message.tabId);

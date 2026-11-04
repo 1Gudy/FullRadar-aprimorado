@@ -3,17 +3,17 @@ const {JSDOM}=require('jsdom');
 const root=path.resolve(__dirname,'..'),key='fullradarPopupDraftV1';
 const windows=new Set();
 test.afterEach(()=>{for(const w of windows)w.close();windows.clear();});
-async function setup({state={},overviewWait=null,search=null}={}) {
+async function setup({state={},overviewWait=null,search=null,version,diskVersion}={}) {
  const dom=new JSDOM(fs.readFileSync(path.join(root,'popup.html'),'utf8'),{url:'https://preview.local/',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window,messages=[];windows.add(w);
  class Clock extends w.Date {constructor(...args){super(...(args.length?args:['2026-10-18T15:00:00Z']));}} w.Date=Clock;
  w.chrome={storage:{local:{get:async k=>({[k]:structuredClone(state[k])}),set:async v=>Object.assign(state,structuredClone(v))}},runtime:{sendMessage:async m=>{
   messages.push(m);
-  if(m.type==='GET_OVERVIEW'){if(overviewWait)await overviewWait;return {activeTabId:7,activeSupportedPage:true,activeSchedulePage:true,tabs:[{id:7,title:'Envio teste',shipmentId:'12345678',supportedPage:true,search}],lastConfig:{mode:'range',startDate:'2026-10-24',endDate:'2026-10-26',intervalSeconds:15},errorLog:[]};}
-  if(m.type==='GET_TELEGRAM_STATUS')return {available:false};
+  if(m.type==='GET_OVERVIEW'){if(overviewWait)await overviewWait;return {version,activeTabId:7,activeSupportedPage:true,activeSchedulePage:true,tabs:[{id:7,title:'Envio teste',shipmentId:'12345678',supportedPage:true,search}],lastConfig:{mode:'range',startDate:'2026-10-24',endDate:'2026-10-26',intervalSeconds:15},errorLog:[]};}
   if(m.type==='START_SEARCH')return {ok:true,results:[{ok:true}]};
   return {ok:true};
  }}};
+ if(diskVersion){w.chrome.runtime.getURL=file=>'chrome-extension://fullradar/'+file;w.fetch=async()=>({json:async()=>({version:diskVersion})});}
  for(const file of ['core.js','popup.js'])w.eval(fs.readFileSync(path.join(root,file),'utf8'));
  const $=selector=>w.document.querySelector(selector);
  const tick=()=>new Promise(r=>setTimeout(r,0));await tick();
@@ -66,6 +66,25 @@ test('seletor de frequência oferece 5 a 30 s de 5 em 5 e envia o valor escolhid
  assert.equal(input.min,'5');assert.equal(input.max,'30');assert.equal(input.step,'5');
  input.value='5';input.dispatchEvent(new h.w.Event('input'));assert.equal(h.$('#intervalOutput').textContent,'5 s');
  h.click('#startActive');await h.tick();assert.equal(h.messages.find(m=>m.type==='START_SEARCH').config.intervalSeconds,5);
+});
+
+test('mudar a frequência com busca ativa aplica na hora, sem reiniciar a busca',async()=>{
+ const h=await setup({search:{running:true,status:'monitoring',config:{mode:'range',startDate:'2026-10-21',endDate:'2026-10-23',intervalSeconds:15,shipmentId:'12345678',autoConfirm:false,automationVersion:2}}});
+ const input=h.$('#interval');input.value='5';input.dispatchEvent(new h.w.Event('input'));input.dispatchEvent(new h.w.Event('change'));await h.tick();
+ const m=h.messages.find(m=>m.type==='SET_INTERVAL');assert.deepEqual([m.tabId,m.intervalSeconds],[7,5]);
+ assert.equal(h.messages.some(m=>m.type==='START_SEARCH'||m.type==='STOP_SEARCH'),false);assert.equal(h.$('#pendingChanges').hidden,true);
+});
+
+test('sem busca ativa, mudar a frequência só salva a preferência',async()=>{
+ const h=await setup();const input=h.$('#interval');input.value='10';input.dispatchEvent(new h.w.Event('input'));input.dispatchEvent(new h.w.Event('change'));await h.tick();
+ assert.equal(h.messages.some(m=>m.type==='SET_INTERVAL'),false);assert.equal(h.state[key].intervalSeconds,10);
+});
+
+test('popup avisa quando o Chrome ainda roda a versão antiga da extensão',async()=>{
+ const stale=await setup({diskVersion:'0.3.8',version:'0.3.6'});await stale.tick();
+ assert.match(stale.$('#actionMessage').textContent,/versão antiga da extensão \(v0\.3\.6\).*recarregar/);
+ const old=await setup({diskVersion:'0.3.8'});await old.tick();assert.match(old.$('#actionMessage').textContent,/versão antiga/);
+ const current=await setup({diskVersion:'0.3.8',version:'0.3.8'});await current.tick();assert.equal(current.$('#actionMessage').textContent,'');
 });
 
 test('popup não exibe mais a conexão com o Telegram',async()=>{

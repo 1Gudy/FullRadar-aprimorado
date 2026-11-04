@@ -152,3 +152,11 @@ test('texto de tooltip, aviso oculto ou fora do agendamento não encerra a leitu
  assert.equal(make(F.unbookedAppointment()+F.noMethodDates()).adapter.pageInfo().noCollectionDates,false);
  assert.equal(make(F.noMethodDates(),'/shipping/inbounds').adapter.pageInfo().noCollectionDates,false);
 });
+
+test('lê o estado do servidor mesmo com código depois do JSON e chaves dentro de textos',()=>{
+ const {JSDOM}=require('jsdom');
+ const dom=new JSDOM(F.noPickupAppointment({message:false}),{url:'https://vendedores.mercadolivre.com.br/shipping/inbounds/12345678/appointment-v2'});
+ const D=require('../dom-adapter.js').create(dom.window.document,dom.window.location,{visible:()=>true});
+ assert.equal(D.serverData().inboundId,12345678);assert.equal(D.serverData().availableShipmentTypes[0].enabled,false);
+ const info=D.pageInfo();assert.equal(info.schedulePage,true);assert.equal(info.noPickup,true);assert.equal(info.noCollectionDates,true);
+});

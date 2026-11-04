@@ -50,6 +50,26 @@ test('intervalo de 5 segundos é respeitado após leitura e após erro',async()=
  assert.equal(reply.nextRefreshAt-h.search().updatedAt,5000);h.advance(5000);await h.content('REFRESH_DUE');assert.deepEqual(h.reloads,[7]);
  await h.content('PHASE',{status:'scanning'});await h.content('RETRY',{message:'Demora'});assert.equal(h.search().nextRefreshAt-h.search().updatedAt,5000);
 });
+test('mudar a frequência durante a espera reprograma o refresh sem reiniciar a busca',async()=>{
+ const h=harness();await h.start({intervalSeconds:30});await h.content('SCAN_COMPLETE');const id=h.search().id;
+ const reply=await h.call({type:'SET_INTERVAL',tabId:7,intervalSeconds:5});
+ assert.equal(reply.ok,true);assert.equal(h.search().id,id);assert.equal(h.search().config.intervalSeconds,5);assert.equal(h.search().nextRefreshAt-h.search().updatedAt,5000);
+ const resched=h.messages.at(-1);assert.equal(resched.type,'RESCHEDULE');assert.equal(resched.searchId,id);assert.equal(resched.nextRefreshAt,h.search().nextRefreshAt);
+ h.advance(5000);await h.content('REFRESH_DUE');assert.deepEqual(h.reloads,[7]);
+ await h.content('PHASE',{status:'scanning'});const next=await h.content('SCAN_COMPLETE');assert.equal(next.nextRefreshAt-h.search().updatedAt,5000);
+});
+test('mudar a frequência durante a leitura vale a partir da próxima espera',async()=>{
+ const h=harness();await h.start({intervalSeconds:30});assert.equal(h.search().status,'scanning');
+ assert.equal((await h.call({type:'SET_INTERVAL',tabId:7,intervalSeconds:10})).ok,true);
+ assert.equal(h.search().status,'scanning');assert.equal(h.messages.some(m=>m.type==='RESCHEDULE'),false);
+ const reply=await h.content('SCAN_COMPLETE');assert.equal(reply.nextRefreshAt-h.search().updatedAt,10000);
+});
+test('mudar a frequência sem busca na aba não cria uma busca',async()=>{
+ const h=harness();assert.equal((await h.call({type:'SET_INTERVAL',tabId:7,intervalSeconds:5})).ok,false);assert.equal(h.search(),undefined);
+});
+test('visão geral informa a versão carregada no service worker',async()=>{
+ const h=harness();assert.equal((await h.call({type:'GET_OVERVIEW'})).version,'0.2.0');
+});
 test('monitor sem resposta não finge que fez a leitura',async()=>{const h=harness();h.setAck(null);await h.start();assert.equal(h.search().checks,0);assert.equal(h.search().failures,1);assert.equal(h.search().status,'monitoring');});
 test('leitura sem vaga agenda nova recarga e registra verificação',async()=>{
   const h=harness();await h.start();await h.content('SCAN_COMPLETE',{months:['2026-10'],message:'Sem vaga'});assert.equal(h.search().checks,1);await h.fire();assert.deepEqual(h.reloads,[7]);assert.equal(h.search().status,'loading');

@@ -5,32 +5,43 @@
   let generation = 0;
   let activeRun = null;
   let refreshTimer = null;
-  const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+  let timerRun = null;
   const send = message => chrome.runtime.sendMessage(message);
   async function emit(run, event, fields = {}) {
     if (run.generation !== generation) return { ok: false };
     const reply = await send({ type: "CONTENT_EVENT", event, searchId: run.id, ...fields });
-    if (alive(run) && reply?.ok && reply.nextRefreshAt) {
-      clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => {
-        if (alive(run)) emit(run, "REFRESH_DUE").catch(() => {});
-      }, Math.max(0, reply.nextRefreshAt - Date.now()));
-    }
+    if (alive(run) && reply?.ok && reply.nextRefreshAt) armRefresh(run, reply.nextRefreshAt);
     return reply;
+  }
+  function armRefresh(run, at) {
+    clearTimeout(refreshTimer);
+    timerRun = run;
+    refreshTimer = setTimeout(() => {
+      if (alive(run)) emit(run, "REFRESH_DUE").catch(() => {});
+    }, Math.max(0, at - Date.now()));
   }
   function alive(run) { return run.generation === generation; }
   function guard(run, requireId = true) {
     if (!alive(run)) throw new Error("CANCELLED");
-    const info = D.pageInfo();
-    if (info.challenge) throw new Error("Conclua o login ou a verificação do Mercado Livre e retome manualmente.");
-    if ((info.shipmentId && info.shipmentId !== run.config.shipmentId) || (requireId && !D.identityMatches(run.config.shipmentId))) throw new Error("O envio desta aba mudou. A busca foi pausada para não atuar em outro envio.");
+    if (D.challenge()) throw new Error("Conclua o login ou a verificação do Mercado Livre e retome manualmente.");
+    const id = C.shipmentId(location.href);
+    if ((id && id !== run.config.shipmentId) || (requireId && !D.identityMatches(run.config.shipmentId))) throw new Error("O envio desta aba mudou. A busca foi pausada para não atuar em outro envio.");
+  }
+  // Reavalia assim que a página muda, em vez de esperar um intervalo fixo.
+  function pageChange(ms) {
+    return new Promise(resolve => {
+      const observer = new MutationObserver(done);
+      const timer = setTimeout(done, ms);
+      function done() { observer.disconnect(); clearTimeout(timer); resolve(); }
+      observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+    });
   }
   async function waitUntil(run, predicate, timeout = 10000) {
     const deadline = Date.now() + timeout;
     while (alive(run) && Date.now() < deadline) {
       const result = predicate();
       if (result) return result;
-      await wait(150);
+      await pageChange(100);
     }
     if (!alive(run)) throw new Error("CANCELLED");
     return null;
@@ -100,12 +111,17 @@
     throw transient("A recuperação ainda não chegou ao calendário. Vou aguardar e tentar novamente.");
   }
   async function openCalendar(run) {
-    const trigger = await waitUntil(run, () => {
+    const ready0 = await waitUntil(run, () => {
       guard(run);
+      const info = D.pageInfo();
+      // Sem coleta no momento: o ML desativa o seletor. Não há o que abrir.
+      if (info.noPickup) return { noPickup: true };
       const control = D.collectionMethod();
-      return !D.pageInfo().busy && D.visible(control) && !D.disabled(control) ? control : null;
+      return !info.busy && D.visible(control) && !D.disabled(control) ? { control } : null;
     });
-    if (!trigger) throw transient("O campo da forma de envio ainda não ficou disponível.");
+    if (!ready0) throw transient("O campo da forma de envio ainda não ficou disponível.");
+    if (ready0.noPickup) return false;
+    const trigger = ready0.control;
     const method = D.methodValue();
     if (method !== "coleta a domicilio") {
       if (method && !/^escolha|^selecione/.test(method)) throw new Error("Este monitor atende coleta a domicílio. O método escolhido foi preservado.");
@@ -182,10 +198,11 @@
     confirm.click();
     await verifyBooking(run, hit.date);
   }
+  const elapsed = run => ((Date.now() - run.startedAt) / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 });
   async function scan(search) {
     if (activeRun) return;
     clearTimeout(refreshTimer);
-    const run = { id: search.id, config: C.normalizeConfig(search.config), generation: ++generation };
+    const run = { id: search.id, config: C.normalizeConfig(search.config), generation: ++generation, startedAt: Date.now() };
     activeRun = run;
     try {
       if (search.status === "confirming") {
@@ -206,13 +223,13 @@
         info = D.pageInfo();
       }
       if (!info.schedulePage) {
-        await emit(run, "RETRY", { message: "A página ainda não ficou pronta. Nova tentativa com espera progressiva." });
+        await emit(run, "RETRY", { message: "A página ainda não ficou pronta." });
         return;
       }
       guard(run);
       await phase(run, "scanning");
       if (!await openCalendar(run)) {
-        await emit(run, "SCAN_COMPLETE", { message: "Sem datas disponíveis para este endereço.", months: [] });
+        await emit(run, "SCAN_COMPLETE", { message: `Sem datas de coleta disponíveis no momento (lido em ${elapsed(run)} s).`, months: [] });
         return;
       }
       const dates = C.requestedDates(run.config, C.today());
@@ -246,7 +263,7 @@
         } else await selectAndConfirm(run, best);
         return;
       }
-      await emit(run, "SCAN_COMPLETE", { months: visited, message: "Calendário verificado: nenhuma das datas desejadas está disponível." });
+      await emit(run, "SCAN_COMPLETE", { months: visited, message: `Calendário verificado em ${elapsed(run)} s: nenhuma das datas desejadas está disponível.` });
     } catch (error) {
       if (alive(run) && error.message !== "CANCELLED") await emit(run, error.retryable ? "RETRY" : "NEEDS_ATTENTION", { message: error.message || "Falha ao verificar o calendário." }).catch(() => {});
     } finally {
@@ -256,6 +273,12 @@
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message.type === "PAGE_INFO") { respond({ ...D.pageInfo(), version: chrome.runtime.getManifest().version }); return false; }
     if (message.type === "STOP_SCAN") { generation++; clearTimeout(refreshTimer); activeRun = null; respond({ ok: true }); return false; }
+    // O usuário mudou o intervalo durante a espera: reprogramar o refresh já armado.
+    if (message.type === "RESCHEDULE") {
+      if (timerRun && alive(timerRun) && timerRun.id === message.searchId) armRefresh(timerRun, message.nextRefreshAt);
+      respond({ ok: true });
+      return false;
+    }
     if (message.type === "SCAN") {
       if (activeRun) { respond({ ok: true, busy: true }); return false; }
       respond({ ok: true });

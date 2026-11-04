@@ -16,29 +16,74 @@
     const disabled = e => !e || e.disabled || e.hasAttribute("disabled") || e.getAttribute("aria-disabled") === "true" || /disabled|outside.?month|other.?month|adjacent/i.test(String(e.className || ""));
     const routeId = () => C.shipmentId(location.href);
     const dateInput = () => unique(all("input[aria-label='Data da coleta'],input[data-testid='date-picker-input']"));
+    // Verificação barata, usada antes de cada ação: não lê o texto da página.
+    function challenge() {
+      return /\/login|\/auth|\/registration|\/account-verification/.test(location.pathname) || all("iframe[src*='captcha'],iframe[src*='recaptcha'],[id*='captcha']").length > 0;
+    }
+    // O servidor do ML envia o estado do agendamento junto com a página
+    // (observado em 04/11/2026): _n.ctx.r={...appProps.pageProps.data...}.
+    // Cada ciclo recarrega a aba, então esse estado é sempre o da leitura atual.
+    let serverCache = { node: null, length: -1, data: null };
+    function firstJson(source) {
+      const start = source.indexOf("{");
+      if (start < 0) return null;
+      let depth = 0, inString = false, escaped = false;
+      for (let i = start; i < source.length; i++) {
+        const ch = source[i];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+        } else if (ch === '"') inString = true;
+        else if (ch === "{") depth++;
+        else if (ch === "}" && --depth === 0) return JSON.parse(source.slice(start, i + 1));
+      }
+      return null;
+    }
+    function serverData() {
+      const node = doc.getElementById("__NORDIC_RENDERING_CTX__");
+      if (!node) return null;
+      const source = node.textContent || "";
+      if (serverCache.node !== node || serverCache.length !== source.length) {
+        let data = null;
+        try { data = firstJson(source)?.appProps?.pageProps?.data || null; } catch { data = null; }
+        serverCache = { node, length: source.length, data };
+      }
+      const data = serverCache.data;
+      return data && String(data.inboundId) === routeId() ? data : null;
+    }
+    function pickupDisabledByServer() {
+      const types = serverData()?.availableShipmentTypes;
+      const pickup = Array.isArray(types) ? types.find(type => type?.type === "pickup") : null;
+      return Boolean(pickup && pickup.enabled === false);
+    }
     function pageInfo() {
       const path = location.pathname;
       const scope = doc.querySelector(".inbound__flow-container,main,#root-app") || doc.body;
       const content = C.normalize(text(scope));
       const headings = all("h1,h2,h3,[role='heading']").map(e => C.normalize(text(e))).join(" ");
-      const challenge = /\/login|\/auth|\/registration|\/account-verification/.test(path) || all("iframe[src*='captcha'],iframe[src*='recaptcha'],[id*='captcha']").length > 0;
+      const blocked = challenge();
       const isInbound = /^\/shipping\/inbounds(?:\/|$)/.test(path);
       const errorPage = /ocorreu um erro|algo deu errado|algo saiu errado|nao foi possivel carregar|estamos com problemas|tente novamente mais tarde/.test(content);
       const schedulePage = Boolean(!errorPage && routeId() && /\/appointment(?:-v\d+)?\/?$/.test(path) && /agende uma data|escolha como voce deseja envia|escolha quando quer que a coleta passe/.test(headings));
       // O ML usa dois avisos: por endereço ou pela própria forma de envio.
       // O segundo precisa ser uma mensagem visível, não tooltip de um dia.
       const noMethodDates = all(".andes-message__text", scope).some(e => /^nao ha datas disponiveis(?:\.|$)/.test(C.normalize(text(e))));
-      const noCollectionDates = schedulePage && (/centros? de distribuicao proximos nao (?:tem|possuem) datas? disponiveis/.test(content) || noMethodDates);
+      // Aviso geral, antes de escolher a forma de envio: o seletor fica desativado.
+      const noPickup = schedulePage && (pickupDisabledByServer() ||
+        all(".andes-message__text", scope).some(e => /^(?:nao temos datas disponiveis no momento|no momento,? nao ha datas disponiveis)/.test(C.normalize(text(e)))));
+      const noCollectionDates = schedulePage && (noPickup || /centros? de distribuicao proximos nao (?:tem|possuem) datas? disponiveis/.test(content) || noMethodDates);
       let recoveryStep = "";
-      if (!challenge && !schedulePage && isInbound) {
+      if (!blocked && !schedulePage && isInbound) {
         if (errorPage) recoveryStep = "error";
         else if (!routeId() && /gestao de envios/.test(headings)) recoveryStep = "management";
         else if (routeId() && /preparacao do envio/.test(headings)) recoveryStep = "preparation";
       }
       return {
-        supported: schedulePage, schedulePage, shipmentId: routeId(), recoveryStep, noCollectionDates,
-        challenge, busy: Boolean(all("[aria-busy='true'],[role='progressbar']").length),
-        message: challenge ? "Login ou verificação do Mercado Livre: conclua manualmente e retome." : schedulePage ? "Página de agendamento reconhecida." : recoveryStep ? "Etapa de recuperação do envio detectada." : "A página ainda não está pronta ou o formato mudou."
+        supported: schedulePage, schedulePage, shipmentId: routeId(), recoveryStep, noCollectionDates, noPickup,
+        // Só indicadores de carregamento da área do envio; widgets do cabeçalho não atrasam a leitura.
+        challenge: blocked, busy: Boolean(all("[aria-busy='true'],[role='progressbar']", scope).length),
+        message: blocked ? "Login ou verificação do Mercado Livre: conclua manualmente e retome." : schedulePage ? "Página de agendamento reconhecida." : recoveryStep ? "Etapa de recuperação do envio detectada." : "A página ainda não está pronta ou o formato mudou."
       };
     }
     function calendar() {
@@ -150,7 +195,7 @@
         return /voce agendou a coleta para/.test(C.normalize(label)) && C.labelMatchesDate(label, date);
       });
     }
-    return { visible, text, disabled, pageInfo, dateInput, calendar, candidate, monthButton, collectionMethod, methodValue, homeOption, currentPreferred, selected, calendarConfirm, finalConfirm, identityMatches, finishShipment, shipmentSearch, collectionEdit, managementLink, bookingConfirmed };
+    return { visible, text, disabled, challenge, serverData, pageInfo, dateInput, calendar, candidate, monthButton, collectionMethod, methodValue, homeOption, currentPreferred, selected, calendarConfirm, finalConfirm, identityMatches, finishShipment, shipmentSearch, collectionEdit, managementLink, bookingConfirmed };
   }
   return { create };
 });

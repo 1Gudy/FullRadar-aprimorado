@@ -59,7 +59,7 @@
     <summary><span class="icon i-adjustments" aria-hidden="true"></span><span>Opções avançadas</span><span class="icon i-chevron-down" aria-hidden="true"></span></summary>
     <div class="advanced-content">
       <section class="advanced-section">
-        <div class="interval-heading"><div><h2>Frequência de verificação</h2><p>Tempo entre uma leitura e o próximo refresh.</p></div><output id="intervalOutput" for="interval">15 s</output></div>
+        <div class="interval-heading"><div><h2>Frequência de verificação</h2><p>Tempo entre uma leitura e o próximo refresh. Vale na hora, mesmo com a busca ativa.</p></div><output id="intervalOutput" for="interval">15 s</output></div>
         <input id="interval" class="range-input" type="range" min="5" max="30" step="5" value="15" aria-label="Intervalo de atualização" list="intervalSteps">
         <datalist id="intervalSteps"><option value="5"></option><option value="10"></option><option value="15"></option><option value="20"></option><option value="25"></option><option value="30"></option></datalist>
         <div class="range-labels"><span>5 s</span><span>10 s</span><span>15 s</span><span>20 s</span><span>25 s</span><span>30 s</span></div><p class="field-hint">O intervalo é fixo: a extensão não aumenta a espera sozinha, nem após erros. Abas suspensas podem atrasar.</p>
@@ -72,7 +72,7 @@
       </details></section>
     </div>
   </details>
-  <footer><span>FullRadar</span><span>v0.3.7</span></footer>
+  <footer><span>FullRadar</span><span>v0.3.8</span></footer>
 </main>
 <script src="core.js"></script><script src="popup.js"></script>
 </body>

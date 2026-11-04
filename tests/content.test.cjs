@@ -257,3 +257,27 @@ test('verificação de acesso durante carregamento da coleta pausa sem clicar no
  }});t.after(()=>h.w.close());h.start();const result=await h.until('NEEDS_ATTENTION');
  assert.match(result.message,/verificação/);assert.equal(h.clicks.length,2);assert.equal(h.events.some(e=>e.event==='SCAN_COMPLETE'),false);
 });
+
+test('leitura reage assim que o aviso aparece, sem esperar um ciclo fixo de verificação',async t=>{
+ let clickedAt=0;
+ const h=pickupHarness({delay:200,onClick:e=>{if(e.target.closest('[data-key="pickup"]'))clickedAt=Date.now();}});t.after(()=>h.w.close());
+ h.start();await h.until('SCAN_COMPLETE',3000);
+ const latency=Date.now()-clickedAt-200;
+ assert.ok(clickedAt&&latency<60,`a leitura demorou ${latency} ms além da página`);
+});
+
+test('sem coleta no momento (estado do servidor) conclui na hora, sem esperar o seletor nem clicar',async t=>{
+ const h=setup({html:F.noPickupAppointment({message:false})});t.after(()=>h.w.close());
+ const started=Date.now();h.start();const result=await h.until('SCAN_COMPLETE',3000);
+ assert.ok(Date.now()-started<1000,'demorou '+(Date.now()-started)+' ms');assert.match(result.message,/Sem datas de coleta/);
+ assert.equal(h.clicks.length,0);assert.equal(h.events.some(e=>['RETRY','NEEDS_ATTENTION'].includes(e.event)),false);
+});
+test('aviso "Não temos datas disponíveis no momento" também conclui sem esperar, mesmo sem o estado do servidor',async t=>{
+ const h=setup({html:F.noPickupAppointment({server:false})});t.after(()=>h.w.close());
+ const started=Date.now();h.start();await h.until('SCAN_COMPLETE',3000);
+ assert.ok(Date.now()-started<1000);assert.equal(h.clicks.length,0);
+});
+test('estado do servidor de outro envio é ignorado',async t=>{
+ const h=setup({html:F.serverState({inboundId:'99999999'})+F.unbookedAppointment()});t.after(()=>h.w.close());
+ assert.equal(h.w.FullRadarDOM.create(h.w.document,h.w.location).pageInfo().noPickup,false);
+});

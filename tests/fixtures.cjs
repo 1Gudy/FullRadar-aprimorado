@@ -74,7 +74,22 @@ function noDates() {
 function noMethodDates() {
   return '<div class="block block--spacer-top block--spacer-medium"><div class="andes-message andes-message--caution andes-message--quiet"><div class="andes-message__content andes-message__content--untitled"><div class="andes-message__text">Não há datas disponíveis. Você pode escolher outra forma de envio para continuar.</div></div></div></div>';
 }
+// Estado enviado pelo servidor do ML, como observado em 04/11/2026 (trecho relevante).
+function serverState({inboundId='12345678',pickup=false}={}) {
+  const data={inboundId:Number(inboundId),status:'working',selectedShipmentType:null,pickupScheduleAvailability:null,
+    availableShipmentTypes:['pickup','ftl','ftlp','supplier'].map(type=>({type,enabled:type==='pickup'?pickup:false,has_active_recurrences:false}))};
+  const ctx={title:'Agendamento - Envios Full',appProps:{pageProps:{basePath:'/shipping/inbounds',note:'chaves } e { dentro de "texto"',data}}};
+  return `<script id="__NORDIC_RENDERING_CTX__">_n.ctx.r=${JSON.stringify(ctx)};_n.ctx.r.extra={"a":1};</script>`;
+}
+// Aviso geral da página real em 04/11/2026; o seletor da forma de envio fica desativado.
+function noPickupMessage() {
+  return '<div class="andes-message andes-message--negative andes-message--quiet"><div class="andes-message__content andes-message__content--untitled"><div class="andes-message__text">Não temos datas disponíveis no momento. Desculpe, tente novamente nos próximos dias.</div></div></div>';
+}
+function noPickupAppointment({server=true,message=true,inboundId='12345678'}={}) {
+  const method=collectionMethod({value:''}).replace('aria-controls=','disabled aria-controls=');
+  return `${server?serverState({inboundId}):''}<main class="inbound__flow-container"><h2>Agende uma data para enviar seus produtos</h2>${message?noPickupMessage():''}<h3>Escolha como você deseja enviá-los</h3>${method}</main>`;
+}
 function unbookedAppointment(options={}) {
   return `<main class="inbound__flow-container"><h2>Agende uma data para enviar seus produtos</h2><h3>Escolha como você deseja enviá-los</h3>${collectionMethod(options)}<section id="pickup-result"></section><button data-confirm="final">Confirmar</button></main>`;
 }
-module.exports={calendar,appointment,management,hub,unbookedHub,costSummary,appointmentWithRealCost,collectionMethod,noDates,noMethodDates,unbookedAppointment};
+module.exports={calendar,appointment,management,hub,unbookedHub,costSummary,appointmentWithRealCost,collectionMethod,noDates,noMethodDates,unbookedAppointment,serverState,noPickupMessage,noPickupAppointment};

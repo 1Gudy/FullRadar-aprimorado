@@ -5,6 +5,7 @@ let overview = null;
 let mode = "range";
 let initialized = false;
 let refreshing = false;
+let refreshQueued = false;
 let hasDraft = false;
 let formTouched = false;
 let rangeEdge = "start";
@@ -12,6 +13,13 @@ let calendarMonth = C.today().slice(0, 7);
 const DRAFT_KEY = "fullradarPopupDraftV1";
 let activeSearch = null;
 let datesEditing = false;
+// Versão dos arquivos em disco; o service worker só troca ao recarregar a extensão.
+const diskVersion = (async () => {
+  try {
+    const response = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
+    return String((await response.json()).version || "");
+  } catch { return ""; }
+})();
 
 function setMessage(text, success = false) {
   const box = $("#actionMessage");
@@ -252,7 +260,7 @@ function renderPresentation() {
   if (busy) {
     try {
       const draft = readConfig(), current = C.normalizeConfig(activeSearch.config);
-      pending = draft.mode !== current.mode || draft.intervalSeconds !== current.intervalSeconds || draft.autoConfirm !== current.autoConfirm ||
+      pending = draft.mode !== current.mode || draft.autoConfirm !== current.autoConfirm ||
         (draft.mode === "range" ? draft.startDate !== current.startDate || draft.endDate !== current.endDate : JSON.stringify(draft.dates) !== JSON.stringify(current.dates));
     } catch { pending = true; }
   }
@@ -471,11 +479,16 @@ function searchStatus(search) {
 }
 
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) { refreshQueued = true; return; }
   refreshing = true;
   try {
     const data = await send({ type: "GET_OVERVIEW" });
     renderOverview(data);
+    const disk = await diskVersion;
+    if (disk && data.version !== disk) {
+      setMessage(`O Chrome ainda está rodando a versão antiga da extensão${data.version ? " (v" + data.version + ")" : ""}. ` +
+        `Abra chrome://extensions, clique em recarregar no FullRadar e atualize a aba do Mercado Livre.`);
+    }
     if (!initialized) {
       const active = data.tabs.find(tab => tab.id === data.activeTabId);
       if (!hasDraft && !formTouched) {
@@ -493,7 +506,10 @@ async function refresh() {
       stage: "consulta do estado",
       message: error?.message || String(error)
     }).catch(() => {});
-  } finally { refreshing = false; }
+  } finally {
+    refreshing = false;
+    if (refreshQueued) { refreshQueued = false; refresh(); }
+  }
 }
 
 async function start(scope) {
@@ -536,6 +552,13 @@ async function resumeActive() {
 
 document.querySelectorAll(".mode-button").forEach(button => button.addEventListener("click", () => { setMode(button.dataset.mode); saveDraft(); }));
 $("#interval").addEventListener("input", () => { updateInterval(); saveDraft(); });
+$("#interval").addEventListener("change", async () => {
+  if (!activeSearch || !overview?.activeTabId) return;
+  const seconds = C.intervalSeconds($("#interval").value);
+  const response = await send({ type: "SET_INTERVAL", tabId: overview.activeTabId, intervalSeconds: seconds }).catch(() => null);
+  if (response?.ok) setMessage(`Frequência alterada para ${seconds} s.`, true);
+  await refresh();
+});
 $("#dates").addEventListener("input", () => { renderCalendar(); saveDraft(); });
 $("#autoConfirm").addEventListener("change", saveDraft);
 $("#previousMonth").addEventListener("click", () => moveMonth(-1));
@@ -569,5 +592,7 @@ $("#stopAll").addEventListener("click", async () => {
 $("#exportErrorLog").addEventListener("click", exportErrorLog);
 
 renderCalendar();
+// Atualiza assim que a busca muda de etapa; o intervalo fica só como reserva.
+chrome.storage.onChanged?.addListener((changes, area) => { if (area === "local" && changes.findfullSearches) refresh(); });
 restoreDraft().finally(() => { refresh(); setInterval(refresh, 2500); });
 setInterval(renderRefreshCounter, 1000);

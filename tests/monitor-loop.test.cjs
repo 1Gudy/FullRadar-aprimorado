@@ -66,7 +66,7 @@ function monitorLoop({recoverAfterRefresh=false}={}) {
   throw Error('Ciclo não concluiu: '+JSON.stringify(search()));
  }
  loadPage();
- return {search,actions,events,reloads,alarms,
+ return {search,actions,events,reloads,alarms,request,timers,
   start:()=>request({type:'START_SEARCH',tabId:7,scope:'active',config:{mode:'range',startDate:'2026-10-21',endDate:'2026-10-23',intervalSeconds:15}}),
   settled,hasTimer:()=>[...timers.values()].some(timer=>timer.at===search()?.nextRefreshAt),
   advance:async()=>{
@@ -91,6 +91,16 @@ test('ciclo integrado: F5 e coleta por 28 leituras sem vaga até encontrar data 
  assert.equal(h.actions.filter(action=>action.method==='pickup').length,29);
  assert.equal(h.actions.some(action=>action.day||action.confirm),false);
  assert.equal(h.events.some(message=>['RETRY','NEEDS_ATTENTION','BEFORE_CONFIRM'].includes(message.event)),false);
+});
+
+test('ciclo integrado: mudar a frequência durante a espera troca o timer da aba e recarrega no novo prazo',async t=>{
+ const h=monitorLoop();t.after(h.close);assert.equal((await h.start()).ok,true);
+ await h.settled(()=>h.search()?.status==='monitoring'&&h.hasTimer());const before=h.search().nextRefreshAt;
+ assert.equal((await h.request({type:'SET_INTERVAL',tabId:7,intervalSeconds:5})).ok,true);
+ await h.settled(()=>h.hasTimer());assert.ok(h.search().nextRefreshAt<before);
+ assert.equal([...h.timers.values()].some(timer=>timer.at===before),false);
+ await h.advance();assert.equal(h.reloads.length,1);assert.equal(h.search().checks,2);
+ assert.equal(h.search().nextRefreshAt-h.search().updatedAt,5000);
 });
 
 test('ciclo integrado recupera por ID, passa pela seta do hub sem reserva e continua recarregando',async t=>{
