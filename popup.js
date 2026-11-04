@@ -11,8 +11,6 @@ let rangeEdge = "start";
 let calendarMonth = C.today().slice(0, 7);
 const DRAFT_KEY = "fullradarPopupDraftV1";
 let activeSearch = null;
-let telegramInitialized = false;
-let telegramStatus = null;
 let datesEditing = false;
 
 function setMessage(text, success = false) {
@@ -37,7 +35,7 @@ function validIso(value) {
 }
 
 function readConfig() {
-  const intervalSeconds = Number($("#interval").value);
+  const intervalSeconds = C.intervalSeconds($("#interval").value);
   // O background vincula a busca ao ID da URL; o formulário não fornece IDs.
   if (mode === "specific") {
     const rawDates = $("#dates").value.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -69,7 +67,7 @@ function loadConfig(config) {
     $("#startDate").value = config.startDate || "";
     $("#endDate").value = config.endDate || "";
   }
-  $("#interval").value = String(config.intervalSeconds || 15);
+  $("#interval").value = String(C.intervalSeconds(config.intervalSeconds));
   $("#autoConfirm").checked = C.normalizeConfig(config).autoConfirm;
   calendarMonth = (config.startDate || config.dates?.[0] || C.today()).slice(0, 7);
   renderCalendar();
@@ -96,7 +94,7 @@ function saveDraft() {
   hasDraft = true;
   renderPresentation();
   const draft = { mode, datesText: $("#dates").value, startDate: $("#startDate").value, endDate: $("#endDate").value,
-    intervalSeconds: Number($("#interval").value), autoConfirm: $("#autoConfirm").checked,
+    intervalSeconds: C.intervalSeconds($("#interval").value), autoConfirm: $("#autoConfirm").checked,
     automationVersion: C.AUTOMATION_VERSION, rangeEdge, calendarMonth };
   // Iniciar a gravação em cada evento; não esperar debounce, blur ou fechamento.
   const status = $("#draftStatus");
@@ -196,8 +194,7 @@ function updateRangeSummary() {
 }
 
 function updateInterval() {
-  const seconds = Number($("#interval").value);
-  $("#intervalOutput").textContent = seconds < 60 ? `${seconds} s` : `${seconds / 60} min`;
+  $("#intervalOutput").textContent = `${C.intervalSeconds($("#interval").value)} s`;
 }
 
 function updateStartAllAvailability() {
@@ -287,27 +284,17 @@ function renderPresentation() {
 
 function renderMonitor(search) {
   const panel = $("#monitorPanel"), clock = $("#monitorClock"), title = $("#monitorTitle"), interval = $("#monitorInterval");
-  const progress = $("#cadenceProgress"), message = $("#monitorMessage");
-  panel.className = "monitor"; panel.setAttribute("aria-label", "Andamento da busca"); progress.hidden = true; message.textContent = "";
+  const message = $("#monitorMessage");
+  panel.className = "monitor"; panel.setAttribute("aria-label", "Andamento da busca"); message.textContent = "";
   clock.textContent = "—"; interval.textContent = "";
   if (search?.running && search.status === "monitoring") {
     panel.classList.add("is-counting");
-    const cadence = C.cadenceStatus(search);
-    const seconds = Number(search.effectiveIntervalSeconds || search.config?.intervalSeconds) || 15;
+    const seconds = C.normalizeConfig(search.config).intervalSeconds;
     const remaining = Number(search.nextRefreshAt) ? Math.ceil((search.nextRefreshAt - Date.now()) / 1000) : seconds;
     clock.textContent = formatDuration(remaining);
     panel.setAttribute("aria-label", "Próxima verificação em " + formatDuration(remaining));
     title.textContent = remaining > 0 ? "Próxima verificação" : "Aguardando atualização";
-    interval.textContent = "Intervalo atual · " + seconds + " s";
-    progress.hidden = false;
-    const count = cadence.probeRemaining ? 5 - cadence.probeRemaining : cadence.stableChecks;
-    const total = cadence.probeRemaining ? 5 : cadence.requiredChecks;
-    const minimum = !cadence.probeRemaining && cadence.intervalSeconds <= cadence.minimumSeconds;
-    $("#stabilityProgress").max = minimum ? 1 : total;
-    $("#stabilityProgress").value = minimum ? 1 : Math.min(count, total);
-    $("#stabilityText").textContent = minimum ? "Intervalo mínimo atingido" : `${count} de ${total} verificações estáveis`;
-    $("#nextIntervalText").textContent = minimum ? "Busca otimizada" : cadence.probeRemaining ? "Testando intervalo menor" : `Depois, tenta ${cadence.nextSeconds} s`;
-    $("#stabilityProgress").setAttribute("aria-valuetext", $("#stabilityText").textContent);
+    interval.textContent = "Intervalo escolhido · " + seconds + " s";
     return;
   }
   const states = {
@@ -334,12 +321,7 @@ function formatDuration(seconds) {
 }
 
 function intervalLabel(seconds) {
-  if (seconds < 60) return "a cada " + seconds + " s";
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder
-    ? "a cada " + minutes + " min " + remainder + " s"
-    : "a cada " + minutes + " min";
+  return "a cada " + seconds + " s";
 }
 
 function renderRefreshCounter() {
@@ -348,7 +330,7 @@ function renderRefreshCounter() {
   const search = activeSearch;
   renderMonitor(search);
   if (search?.running && search.status === "monitoring") {
-    const seconds = Number(search.effectiveIntervalSeconds || search.config?.intervalSeconds) || 15;
+    const seconds = C.normalizeConfig(search.config).intervalSeconds;
     const remaining = Number(search.nextRefreshAt)
       ? Math.ceil((search.nextRefreshAt - Date.now()) / 1000)
       : seconds;
@@ -356,12 +338,6 @@ function renderRefreshCounter() {
     detail.textContent = intervalLabel(seconds) + (search.lastRefreshAt
       ? " · último pedido há " + formatDuration((Date.now() - search.lastRefreshAt) / 1000)
       : " · aguardando a primeira atualização") + " · estimativa do Chrome";
-    const cadence = C.cadenceStatus(search);
-    detail.textContent += cadence.probeRemaining
-      ? ` · Testando intervalo menor: ${5 - cadence.probeRemaining}/5 verificações estáveis.`
-      : cadence.intervalSeconds > cadence.minimumSeconds
-        ? ` · ${cadence.stableChecks}/${cadence.requiredChecks} verificações estáveis; próxima tentativa: ${cadence.nextSeconds} s.`
-        : " · Intervalo mínimo atingido.";
     return;
   }
   if (search?.status === "recovering") {
@@ -509,10 +485,6 @@ async function refresh() {
       updateStartAllAvailability();
       initialized = true;
     }
-    if (!telegramInitialized) {
-      telegramInitialized = true;
-      await refreshTelegramStatus();
-    }
   } catch (error) {
     setMessage("Não consegui consultar o estado da extensão. Reabra o popup.");
     send({
@@ -522,122 +494,6 @@ async function refresh() {
       message: error?.message || String(error)
     }).catch(() => {});
   } finally { refreshing = false; }
-}
-
-function renderTelegramStatus(status) {
-  telegramStatus = status;
-  const panel = $("#telegramPanel");
-  panel.hidden = false;
-  const badge = $("#telegramBadge");
-  const description = $("#telegramDescription");
-  const message = $("#telegramMessage");
-  const connect = $("#telegramConnect");
-  const openBot = $("#telegramOpenBot");
-  const check = $("#telegramCheck");
-  const disconnect = $("#telegramDisconnect");
-  badge.className = "telegram-badge";
-  message.textContent = status.error || "";
-  if (!status.available) {
-    badge.textContent = "configuração pendente";
-    description.textContent = "O aviso privado será liberado quando o bot e o serviço do FullRadar estiverem configurados.";
-    connect.textContent = "Telegram ainda indisponível";
-    connect.disabled = true;
-    openBot.hidden = true;
-    check.hidden = true;
-    disconnect.hidden = true;
-    return;
-  }
-  connect.disabled = false;
-  if (status.connected) {
-    badge.textContent = "conectado";
-    badge.classList.add("is-connected");
-    description.textContent = "Pronto. Você receberá uma mensagem privada quando o agendamento for confirmado.";
-    connect.hidden = true;
-    openBot.hidden = true;
-    check.hidden = true;
-    disconnect.hidden = false;
-    return;
-  }
-  disconnect.hidden = true;
-  connect.hidden = false;
-  if (status.pending) {
-    badge.textContent = "aguardando";
-    badge.classList.add("is-pending");
-    description.textContent = "Abra o bot no Telegram, toque em Iniciar e depois volte aqui para verificar.";
-    openBot.hidden = false;
-    check.hidden = false;
-    connect.textContent = "Gerar novo link";
-  } else {
-    badge.textContent = "desconectado";
-    description.textContent = "Conecte uma vez para receber a confirmação do agendamento por mensagem privada.";
-    openBot.hidden = true;
-    check.hidden = true;
-    connect.textContent = status.authorizationRequired ? "Permitir e conectar" : "Conectar Telegram";
-  }
-}
-
-async function refreshTelegramStatus() {
-  try {
-    const status = await send({ type: "GET_TELEGRAM_STATUS" });
-    renderTelegramStatus(status || { available: false });
-  } catch (error) {
-    renderTelegramStatus({ available: true, error: error?.message || "Não consegui consultar a conexão." });
-  }
-}
-
-async function connectTelegram() {
-  const config = globalThis.FULLRADAR_TELEGRAM_CONFIG || {};
-  let originPattern;
-  try {
-    const gateway = new URL(config.gatewayUrl || "");
-    if (gateway.protocol !== "https:" || gateway.pathname !== "/" || gateway.search || gateway.hash) {
-      throw new Error("O serviço do Telegram ainda não está configurado corretamente.");
-    }
-    originPattern = `${gateway.origin}/*`;
-  } catch (error) {
-    $("#telegramMessage").textContent = error.message || "O serviço do Telegram ainda não está configurado.";
-    return;
-  }
-  try {
-    const permitted = await chrome.permissions.request({ origins: [originPattern] });
-    if (!permitted) {
-      $("#telegramMessage").textContent = "O acesso ao serviço do FullRadar é necessário para conectar o bot.";
-      return;
-    }
-    $("#telegramConnect").disabled = true;
-    $("#telegramMessage").textContent = "Preparando o link seguro…";
-    const result = await send({ type: "START_TELEGRAM_PAIRING" });
-    if (!result?.ok) throw new Error(result?.error || "Não consegui iniciar a conexão.");
-    await refreshTelegramStatus();
-    await chrome.tabs.create({ url: result.startUrl, active: true });
-  } catch (error) {
-    $("#telegramMessage").textContent = error?.message || "Não consegui abrir o Telegram.";
-  } finally {
-    $("#telegramConnect").disabled = false;
-  }
-}
-
-async function verifyTelegramConnection() {
-  $("#telegramMessage").textContent = "Verificando…";
-  await refreshTelegramStatus();
-  if (telegramStatus?.connected) {
-    $("#telegramMessage").textContent = "Conectado. Os próximos agendamentos confirmados chegarão no privado.";
-  } else if (!telegramStatus?.error) {
-    $("#telegramMessage").textContent = "Ainda não conectado. No Telegram, toque em Iniciar no bot e tente novamente.";
-  }
-}
-
-async function disconnectTelegram() {
-  $("#telegramDisconnect").disabled = true;
-  try {
-    const result = await send({ type: "DISCONNECT_TELEGRAM" });
-    if (!result?.ok) throw new Error(result?.error || "Não consegui desconectar o Telegram.");
-    await refreshTelegramStatus();
-  } catch (error) {
-    $("#telegramMessage").textContent = error?.message || "Não consegui desconectar o Telegram.";
-  } finally {
-    $("#telegramDisconnect").disabled = false;
-  }
 }
 
 async function start(scope) {
@@ -711,12 +567,6 @@ $("#stopAll").addEventListener("click", async () => {
   await refresh();
 });
 $("#exportErrorLog").addEventListener("click", exportErrorLog);
-$("#telegramConnect").addEventListener("click", connectTelegram);
-$("#telegramOpenBot").addEventListener("click", async () => {
-  if (telegramStatus?.startUrl) await chrome.tabs.create({ url: telegramStatus.startUrl, active: true });
-});
-$("#telegramCheck").addEventListener("click", verifyTelegramConnection);
-$("#telegramDisconnect").addEventListener("click", disconnectTelegram);
 
 renderCalendar();
 restoreDraft().finally(() => { refresh(); setInterval(refresh, 2500); });

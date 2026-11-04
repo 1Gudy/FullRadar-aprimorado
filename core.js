@@ -25,13 +25,19 @@
       return u.protocol === "https:" && (u.hostname === "mercadolivre.com.br" || u.hostname.endsWith(".mercadolivre.com.br") || u.hostname === "mercadolibre.com" || u.hostname.endsWith(".mercadolibre.com"));
     } catch { return false; }
   }
+  const INTERVAL_MIN = 5, INTERVAL_MAX = 30, INTERVAL_STEP = 5, INTERVAL_DEFAULT = 15;
+  // Intervalo fixo escolhido pelo usuário: de 5 em 5 s, entre 5 e 30 s.
+  function intervalSeconds(value) {
+    const seconds = Math.round((Number(value) || INTERVAL_DEFAULT) / INTERVAL_STEP) * INTERVAL_STEP;
+    return Math.max(INTERVAL_MIN, Math.min(INTERVAL_MAX, seconds));
+  }
   function normalizeConfig(config = {}) {
     return {
       mode: config.mode === "range" ? "range" : "specific",
       dates: Array.isArray(config.dates) ? [...new Set(config.dates.filter(isIsoDate))] : [],
       startDate: isIsoDate(config.startDate) ? config.startDate : "",
       endDate: isIsoDate(config.endDate) ? config.endDate : "",
-      intervalSeconds: Math.max(15, Math.min(300, Number(config.intervalSeconds) || 15)),
+      intervalSeconds: intervalSeconds(config.intervalSeconds),
       shipmentId: String(config.shipmentId || "").trim().replace(/^#/, ""),
       // Configurações antigas não autorizam uma nova implementação a confirmar.
       autoConfirm: config.autoConfirm === true && config.automationVersion === AUTOMATION_VERSION,
@@ -77,54 +83,5 @@
     const [fy, fm] = from.split("-").map(Number), [ty, tm] = to.split("-").map(Number);
     return (ty - fy) * 12 + tm - fm;
   }
-  function retrySeconds(interval, failures) { return Math.min(900, Math.max(15, interval) * 2 ** Math.min(4, failures)); }
-  function cadenceStatus(search) {
-    const minimumSeconds = normalizeConfig(search.config).intervalSeconds;
-    const intervalSeconds = Math.min(900, Math.max(minimumSeconds, Number(search.effectiveIntervalSeconds) || minimumSeconds));
-    const nextSeconds = Math.max(minimumSeconds, Math.ceil(intervalSeconds / 2 / 15) * 15);
-    const saved = search.cadence?.version === 1 ? search.cadence : {};
-    const sameInterval = saved.intervalSeconds === intervalSeconds;
-    const penalties = {};
-    for (const [key, value] of Object.entries(saved.penalties || {})) {
-      if (/^\d+$/.test(key) && Number(key) >= minimumSeconds && Number(key) <= 900 && Number.isInteger(value) && value > 0) penalties[key] = Math.min(2, value);
-    }
-    const requiredChecks = 20 * 2 ** (penalties[String(nextSeconds)] || 0);
-    const probeFromSeconds = sameInterval && Number.isFinite(saved.probeFromSeconds) && saved.probeFromSeconds > intervalSeconds && saved.probeFromSeconds <= 900 ? saved.probeFromSeconds : 0;
-    const probeRemaining = probeFromSeconds && Number.isInteger(saved.probeRemaining) ? Math.max(0, Math.min(5, saved.probeRemaining)) : 0;
-    const stableChecks = sameInterval && intervalSeconds > minimumSeconds && Number.isInteger(saved.stableChecks) ? Math.max(0, Math.min(requiredChecks - 1, saved.stableChecks)) : 0;
-    return { minimumSeconds, intervalSeconds, nextSeconds, requiredChecks, stableChecks, probeFromSeconds: probeRemaining ? probeFromSeconds : 0, probeRemaining, penalties };
-  }
-  // Estado serializável: suspender o service worker não perde o aprendizado.
-  function adjustCadence(search, outcome) {
-    const state = cadenceStatus(search);
-    let { intervalSeconds, stableChecks, probeFromSeconds, probeRemaining } = state;
-    const penalties = { ...state.penalties };
-    if (outcome === "failure") {
-      stableChecks = 0;
-      if (probeRemaining) {
-        penalties[String(intervalSeconds)] = Math.min(2, (penalties[String(intervalSeconds)] || 0) + 1);
-        intervalSeconds = probeFromSeconds;
-      } else intervalSeconds = retrySeconds(intervalSeconds, 1);
-      probeFromSeconds = 0;
-      probeRemaining = 0;
-    } else if (outcome === "interrupted") {
-      stableChecks = 0;
-    } else if (outcome === "success") {
-      if (probeRemaining && --probeRemaining === 0) {
-        delete penalties[String(intervalSeconds)];
-        probeFromSeconds = 0;
-      }
-      if (intervalSeconds > state.minimumSeconds && ++stableChecks >= state.requiredChecks) {
-        probeFromSeconds = intervalSeconds;
-        intervalSeconds = state.nextSeconds;
-        probeRemaining = 5;
-        stableChecks = 0;
-      }
-    } else throw new Error("Resultado de cadência desconhecido.");
-    return {
-      effectiveIntervalSeconds: intervalSeconds,
-      cadence: { version: 1, intervalSeconds, stableChecks, probeFromSeconds, probeRemaining, penalties }
-    };
-  }
-  return { AUTOMATION_VERSION, normalize, months, isIsoDate, today, shipmentId, isMarketplaceUrl, normalizeConfig, requestedDates, validateConfig, monthIn, labelMatchesDate, monthDistance, retrySeconds, cadenceStatus, adjustCadence };
+  return { AUTOMATION_VERSION, normalize, months, isIsoDate, today, shipmentId, isMarketplaceUrl, normalizeConfig, requestedDates, validateConfig, monthIn, labelMatchesDate, monthDistance, intervalSeconds, INTERVAL_MIN, INTERVAL_MAX, INTERVAL_STEP };
 });

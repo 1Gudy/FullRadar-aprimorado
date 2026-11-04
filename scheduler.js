@@ -8,7 +8,6 @@ function serial(tabId, task) {
   next.finally(() => { if (tabQueues.get(tabId) === next) tabQueues.delete(tabId); }).catch(() => {});
   return next;
 }
-const isIsoDate = C.isIsoDate;
 async function readSearches() { return (await chrome.storage.local.get(SEARCHES_KEY))[SEARCHES_KEY] || {}; }
 async function readSearch(tabId) { return (await readSearches())[String(tabId)] || null; }
 function saveSearch(tabId, search) {
@@ -21,6 +20,8 @@ function saveSearch(tabId, search) {
   return task;
 }
 const alarmName = id => ALARM_PREFIX + id;
+// O intervalo é sempre o escolhido no popup; erros não alteram a frequência.
+const intervalOf = search => C.normalizeConfig(search.config).intervalSeconds;
 async function sendToTab(tabId, message) {
   let timeout;
   try { return await Promise.race([chrome.tabs.sendMessage(tabId, message, { frameId: 0 }), new Promise(resolve => { timeout = setTimeout(() => resolve(null), 4000); })]); }
@@ -32,9 +33,9 @@ async function notify(tabId, title, message) {
 }
 async function schedule(tabId, search, seconds) {
   search.updatedAt = Date.now();
-  search.nextRefreshAt = search.updatedAt + Math.max(15, seconds) * 1000;
+  search.nextRefreshAt = search.updatedAt + Math.max(C.INTERVAL_MIN, seconds) * 1000;
   await saveSearch(tabId, search);
-  // O timer da aba permite 15 s; o alarme MV3 mantém um fallback persistente de 30 s.
+  // O timer da aba permite intervalos curtos; o alarme MV3 mantém um fallback persistente de 30 s.
   await chrome.alarms.create(alarmName(tabId), { when: Math.max(search.nextRefreshAt, Date.now() + 30000) });
 }
 async function pause(tabId, search, message) {
@@ -52,21 +53,16 @@ async function pause(tabId, search, message) {
 }
 async function retry(tabId, search, message) {
   search.failures = (search.failures || 0) + 1;
-  search.cycleHadInstability = true;
-  search.cyclePenaltyApplied = true;
   search.cycleSampled = false;
-  Object.assign(search, C.adjustCadence(search, "failure"));
-  // Falhas transitórias não encerram a busca. A espera permanece limitada
-  // pela cadência, e o limite de navegação vale só para cada tentativa.
+  // Falhas transitórias não encerram a busca nem mudam o intervalo escolhido;
+  // o limite de navegação vale só para cada tentativa.
   search.recoveryHops = 0;
   search.status = "monitoring";
   search.running = true;
-  search.resultMessage = `${message} Intervalo ajustado para ${search.effectiveIntervalSeconds} s.`;
-  await schedule(tabId, search, search.effectiveIntervalSeconds);
+  search.resultMessage = `${message} Nova tentativa em ${intervalOf(search)} s.`;
+  await schedule(tabId, search, intervalOf(search));
 }
 function beginCycle(search) {
-  search.cycleHadInstability = false;
-  search.cyclePenaltyApplied = false;
   search.cycleSampled = false;
 }
 async function dispatchScan(tabId, search) {
@@ -93,7 +89,7 @@ async function startOne(tab, rawConfig, resume = false) {
     const origin = new URL(tab.url).origin;
     if (Object.entries(all).some(([id, s]) => Number(id) !== tab.id && ACTIVE.has(s.status) && s.origin === origin && s.config.shipmentId === config.shipmentId)) return { ok: false, error: "Já existe uma busca ativa para este envio em outra aba." };
     await sendToTab(tab.id, { type: "STOP_SCAN" });
-    const search = { id: crypto.randomUUID(), running: true, status: "scanning", config, effectiveIntervalSeconds: config.intervalSeconds, origin, tabUrl: tab.url, tabTitle: tab.title, startedAt: Date.now(), lastRefreshAt: 0, lastCheckedAt: 0, checks: 0, failures: 0, recoveryHops: 0 };
+    const search = { id: crypto.randomUUID(), running: true, status: "scanning", config, origin, tabUrl: tab.url, tabTitle: tab.title, startedAt: Date.now(), lastRefreshAt: 0, lastCheckedAt: 0, checks: 0, failures: 0, recoveryHops: 0 };
     beginCycle(search);
     await chrome.storage.local.set({ [LAST_CONFIG_KEY]: config });
     await dispatchScan(tab.id, search);
@@ -136,10 +132,6 @@ async function handleContentEvent(message, sender) {
         if (message.status === "selecting" && (!search.config.autoConfirm || !dateAllowed(message.date))) return { ok: false };
         // Uma navegação manual pode iniciar novo documento entre duas recargas.
         if (search.status === "monitoring" && search.cycleSampled && ["scanning", "recovering"].includes(message.status)) beginCycle(search);
-        if (message.status === "recovering") {
-          search.cycleHadInstability = true;
-          Object.assign(search, C.adjustCadence(search, "interrupted"));
-        }
         search.status = message.status;
         search.recoveryStep = message.step || "";
         if (message.date) search.foundDate = message.date;
@@ -148,10 +140,8 @@ async function handleContentEvent(message, sender) {
         return { ok: true };
       }
       case "SCAN_COMPLETE":
-        // Um calendário concluído conta uma vez; etapas de recuperação não são sucessos limpos.
+        // Um calendário concluído conta uma vez.
         if (search.cycleSampled) return { ok: false };
-        if (!search.cycleHadInstability) Object.assign(search, C.adjustCadence(search, "success"));
-        else if (!search.cyclePenaltyApplied) Object.assign(search, C.adjustCadence(search, "failure"));
         search.cycleSampled = true;
         search.status = "monitoring";
         search.running = true;
@@ -161,7 +151,7 @@ async function handleContentEvent(message, sender) {
         search.recoveryHops = 0;
         search.resultMessage = message.message;
         search.monthsChecked = message.months || [];
-        await schedule(tabId, search, search.effectiveIntervalSeconds || search.config.intervalSeconds);
+        await schedule(tabId, search, intervalOf(search));
         return { ok: true, nextRefreshAt: search.nextRefreshAt };
       case "RETRY": await retry(tabId, search, message.message); return { ok: true, nextRefreshAt: search.status === "monitoring" ? search.nextRefreshAt : 0 };
       case "REFRESH_DUE":
@@ -199,7 +189,6 @@ async function handleContentEvent(message, sender) {
         await saveSearch(tabId, search);
         await chrome.alarms.clear(alarmName(tabId));
         await notify(tabId, "Coleta confirmada", `O Mercado Livre confirmou a coleta para ${search.foundDate}.`);
-        await notifyTelegramBooking(search);
         return { ok: true };
       default: return { ok: false };
     }
@@ -254,7 +243,7 @@ async function restoreAlarms() {
     if (!search.origin || search.config?.automationVersion !== C.AUTOMATION_VERSION || C.shipmentId(tab.url) !== search.config.shipmentId) { await pause(Number(id), search, "Confira o envio e retome a busca após atualizar ou reiniciar o navegador."); return; }
     if (["selecting", "confirming"].includes(search.status)) { await pause(Number(id), search, "O navegador reiniciou durante uma seleção. Confira a reserva antes de retomar."); return; }
     search.status = "monitoring";
-    await schedule(Number(id), search, search.effectiveIntervalSeconds || search.config.intervalSeconds || 15);
+    await schedule(Number(id), search, intervalOf(search));
   });
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -264,9 +253,6 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     // Comandos do popup não são aceitos de scripts de uma página.
     if (sender.tab) return { ok: false };
     if (message.type === "GET_OVERVIEW") return getOverview();
-    if (message.type === "GET_TELEGRAM_STATUS") return getTelegramStatus();
-    if (message.type === "START_TELEGRAM_PAIRING") return startTelegramPairing();
-    if (message.type === "DISCONNECT_TELEGRAM") return disconnectTelegram();
     if (message.type === "LOG_ERROR") { await appendErrorLog(message); return { ok: true }; }
     if (message.type === "START_SEARCH") {
       if (message.scope === "all" && message.config?.shipmentId) return { ok: false, results: [{ ok: false, error: "Um ID específico só pode ser iniciado na aba correspondente." }] };

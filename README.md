@@ -13,6 +13,7 @@ Extensão local para acompanhar datas de coleta disponíveis em envios Full do M
 
 - Escolha um período de datas ou datas em ordem no calendário da extensão.
 - Clique em **Iniciar busca nesta aba** para monitorar sem selecionar uma data.
+- Em **Opções avançadas → Frequência de verificação**, escolha o intervalo do refresh: 5, 10, 15, 20, 25 ou 30 segundos. O intervalo é fixo e não muda sozinho após erros.
 - A opção **Confirmação automática** é opcional e vem desativada. Quando ligada, a extensão pode selecionar e confirmar uma data disponível de acordo com as preferências configuradas.
 - Use **Parar** para interromper a busca.
 
@@ -32,7 +33,7 @@ Os testes usam páginas e dados simulados; eles não confirmam disponibilidade n
 
 ## Privacidade
 
-A extensão roda no navegador e solicita acesso às páginas do Mercado Livre indicadas no manifesto. O recurso opcional do Telegram usa o serviço público configurado em `telegram-config.js`; a extensão não inclui o token do bot. Não adicione credenciais, cookies ou dados pessoais a commits ou issues.
+A extensão roda no navegador e solicita acesso às páginas do Mercado Livre indicadas no manifesto. A extensão não envia dados para serviços externos. Não adicione credenciais, cookies ou dados pessoais a commits ou issues.
 
 ## Créditos
 

@@ -20,7 +20,7 @@ function monitorLoop({recoverAfterRefresh=false}={}) {
   notifications:{create:async()=>{},onClicked:event('notification')},permissions:{contains:async()=>false}
  };
  const context=vm.createContext({chrome,crypto:webcrypto,Date:Clock,URL,Intl,console,AbortController,setTimeout,clearTimeout,btoa,fetch:()=>{throw Error('Teste sem rede');}});
- context.importScripts=(...files)=>files.forEach(file=>{if(file!=='telegram-config.js')vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});});
+ context.importScripts=(...files)=>files.forEach(file=>{vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context,{filename:file});});
  vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),context,{filename:'background.js'});
  function loadPage() {
   dom?.window.close();timers.clear();
@@ -82,7 +82,7 @@ test('ciclo integrado: F5 e coleta por 28 leituras sem vaga até encontrar data 
  await h.settled(()=>h.search()?.status==='monitoring'&&h.hasTimer());
  for(let cycle=0;cycle<28;cycle++){
   assert.equal(h.search().status,'monitoring');assert.equal(h.search().checks,cycle+1);
-  assert.equal(h.search().effectiveIntervalSeconds,15);assert.equal(h.search().failures,0);
+  assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);assert.equal(h.search().failures,0);
   assert.equal(h.actions.filter(action=>action.cycle===cycle&&action.method==='pickup').length,1);
   await h.advance();
  }
@@ -97,7 +97,7 @@ test('ciclo integrado recupera por ID, passa pela seta do hub sem reserva e cont
  const h=monitorLoop({recoverAfterRefresh:true});t.after(h.close);assert.equal((await h.start()).ok,true);
  await h.settled(()=>h.search()?.status==='monitoring'&&h.hasTimer());await h.advance();
  assert.equal(h.search().status,'monitoring');assert.equal(h.search().checks,2);
- assert.equal(h.search().config.shipmentId,'12345678');assert.equal(h.search().effectiveIntervalSeconds,30);
+ assert.equal(h.search().config.shipmentId,'12345678');assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
  assert.deepEqual(h.actions.filter(action=>action.href).map(action=>action.href),['/shipping/inbounds/12345678/appointment']);
  assert.equal(h.actions.filter(action=>action.method==='pickup').length,2);
  await h.advance();assert.equal(h.search().status,'monitoring');assert.equal(h.search().checks,3);

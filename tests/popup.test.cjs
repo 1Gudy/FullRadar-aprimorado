@@ -55,25 +55,31 @@ test('calendário navega mês sem perder seleção e bloqueia passado',async t=>
  assert.equal(h.$('#startDate').value,'2026-11-03');h.click('#previousMonth');assert.match(h.$('#calendarMonth').textContent,/outubro/);
 });
 
-test('popup mostra progresso da redução e respeita espera maior após tentativa ruim',async()=>{
- const h=await setup({search:{running:true,status:'monitoring',config:{intervalSeconds:15},effectiveIntervalSeconds:30,cadence:{version:1,intervalSeconds:30,stableChecks:12,penalties:{15:1}}}});
- assert.match(h.$('#refreshDetail').textContent,/12\/40 verificações estáveis; próxima tentativa: 15 s/);
+test('popup mostra o intervalo escolhido mesmo com busca salva pela versão anterior',async()=>{
+ const h=await setup({search:{running:true,status:'monitoring',config:{intervalSeconds:10},effectiveIntervalSeconds:30,cadence:{version:1,intervalSeconds:30,stableChecks:12,penalties:{15:1}}}});
+ assert.match(h.$('#refreshDetail').textContent,/a cada 10 s/);assert.doesNotMatch(h.$('#refreshDetail').textContent,/verificações estáveis/);
+ assert.equal(h.$('#monitorInterval').textContent,'Intervalo escolhido · 10 s');
 });
 
-test('popup distingue teste de velocidade de intervalo mínimo já estável',async()=>{
- const search={running:true,status:'monitoring',config:{intervalSeconds:15},effectiveIntervalSeconds:15,cadence:{version:1,intervalSeconds:15,stableChecks:0,probeFromSeconds:30,probeRemaining:3,penalties:{}}};
- const h=await setup({search});assert.match(h.$('#refreshDetail').textContent,/2\/5 verificações estáveis/);
- search.cadence.probeRemaining=0;const steady=await setup({search});assert.match(steady.$('#refreshDetail').textContent,/Intervalo mínimo atingido/);
+test('seletor de frequência oferece 5 a 30 s de 5 em 5 e envia o valor escolhido',async()=>{
+ const h=await setup();const input=h.$('#interval');
+ assert.equal(input.min,'5');assert.equal(input.max,'30');assert.equal(input.step,'5');
+ input.value='5';input.dispatchEvent(new h.w.Event('input'));assert.equal(h.$('#intervalOutput').textContent,'5 s');
+ h.click('#startActive');await h.tick();assert.equal(h.messages.find(m=>m.type==='START_SEARCH').config.intervalSeconds,5);
+});
+
+test('popup não exibe mais a conexão com o Telegram',async()=>{
+ const h=await setup();assert.equal(h.$('#telegramPanel'),null);
+ assert.equal(h.messages.some(m=>/TELEGRAM/.test(m.type)),false);
 });
 
 const activeConfig={mode:'range',startDate:'2026-10-21',endDate:'2026-10-23',intervalSeconds:15,shipmentId:'12345678',autoConfirm:false,automationVersion:2};
-function liveSearch(extra={}) {return {running:true,status:'monitoring',config:{...activeConfig},effectiveIntervalSeconds:30,cadence:{version:1,intervalSeconds:30,stableChecks:12,penalties:{}},...extra};}
+function liveSearch(extra={}) {return {running:true,status:'monitoring',config:{...activeConfig},...extra};}
 
 test('Pulso abre busca ativa sem reiniciar e botão Parar envia somente STOP_SEARCH para a aba correta',async()=>{
  const search=liveSearch(),before=JSON.stringify(search),h=await setup({search});
  assert.equal(h.$('#startActive').hidden,true);assert.equal(h.$('#stopActive').hidden,false);
- assert.equal(h.$('#rangeFields').hidden,true);assert.equal(h.$('#stabilityProgress').value,12);assert.equal(h.$('#stabilityProgress').max,20);
- assert.equal(h.$('#nextIntervalText').textContent,'Depois, tenta 15 s');
+ assert.equal(h.$('#rangeFields').hidden,true);assert.equal(h.$('#monitorInterval').textContent,'Intervalo escolhido · 15 s');
  assert.equal(h.messages.some(m=>m.type==='START_SEARCH'||m.type==='STOP_SEARCH'),false);
  h.click('#stopActive');await h.tick();assert.deepEqual(h.messages.filter(m=>m.type==='STOP_SEARCH').map(m=>[m.type,m.tabId]),[['STOP_SEARCH',7]]);
  assert.equal(JSON.stringify(search),before);assert.equal(h.messages.some(m=>m.type==='START_SEARCH'),false);
@@ -95,18 +101,13 @@ test('switch de confirmação explica efeito e não autoriza nem reinicia ao edi
 });
 test('recuperação e resultado não apresentam contagem nem progresso falsos',async()=>{
  const recovery=await setup({search:liveSearch({status:'recovering'})});
- assert.equal(recovery.$('#cadenceProgress').hidden,true);assert.match(recovery.$('#monitorTitle').textContent,/Recuperando/);assert.equal(recovery.$('#monitorClock').textContent,'—');
+ assert.match(recovery.$('#monitorTitle').textContent,/Recuperando/);assert.equal(recovery.$('#monitorClock').textContent,'—');
  const found=await setup({search:liveSearch({running:false,status:'found',foundDate:'2026-10-22'})});
- assert.match(found.$('#monitorTitle').textContent,/Data encontrada/);assert.match(found.$('#monitorMessage').textContent,/reserva foi preservada/);assert.equal(found.$('#stopActive').hidden,true);assert.equal(found.$('#cadenceProgress').hidden,true);
+ assert.match(found.$('#monitorTitle').textContent,/Data encontrada/);assert.match(found.$('#monitorMessage').textContent,/reserva foi preservada/);assert.equal(found.$('#stopActive').hidden,true);
 });
 test('pausa oferece Retomar com os mesmos dados e confirmação desligada',async()=>{
  const h=await setup({search:liveSearch({running:false,status:'needs_attention'})});
  assert.equal(h.$('#resumeSearch').hidden,false);assert.equal(h.$('#startActive').hidden,true);
  h.click('#resumeSearch');await h.tick();const m=h.messages.find(m=>m.type==='RESUME_SEARCH');assert.equal(m.tabId,7);assert.equal(m.config.autoConfirm,false);
 });
-test('velocidade mínima e período de teste têm progresso e rótulos próprios',async()=>{
- const probe=await setup({search:liveSearch({effectiveIntervalSeconds:15,cadence:{version:1,intervalSeconds:15,stableChecks:0,probeFromSeconds:30,probeRemaining:3,penalties:{}}})});
- assert.equal(probe.$('#stabilityProgress').value,2);assert.equal(probe.$('#stabilityProgress').max,5);assert.match(probe.$('#nextIntervalText').textContent,/Testando/);
- const minimum=await setup({search:liveSearch({effectiveIntervalSeconds:15,cadence:{version:1,intervalSeconds:15,stableChecks:0,penalties:{}}})});
- assert.match(minimum.$('#stabilityText').textContent,/mínimo atingido/);assert.equal(minimum.$('#stabilityProgress').value,1);assert.equal(minimum.$('#stabilityProgress').max,1);
-});
+

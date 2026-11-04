@@ -19,7 +19,7 @@ function harness(initial={}) {
     permissions:{contains:async()=>false}
   };
   const ctx=vm.createContext({chrome,crypto:webcrypto,Date:Clock,URL,Intl,console,AbortController,setTimeout,clearTimeout,btoa,fetch:()=>{throw Error('Nenhuma rede deve ser usada nos testes');}});
-  ctx.importScripts=(...files)=>files.forEach(file=>{if(file==='telegram-config.js')return;vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});});
+  ctx.importScripts=(...files)=>files.forEach(file=>{vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),ctx,{filename:file});});
   vm.runInContext(fs.readFileSync(path.join(root,'background.js'),'utf8'),ctx,{filename:'background.js'});
   const call=(message,sender={})=>new Promise(resolve=>listeners.message(message,sender,resolve));
   const search=()=>state.findfullSearches?.['7'];
@@ -40,10 +40,15 @@ test('timer de 15 segundos recarrega uma vez e alarme mantém fallback de 30',as
  assert.equal((await h.content('REFRESH_DUE')).ok,false);h.advance(15000);
  await h.content('REFRESH_DUE');await h.content('REFRESH_DUE');assert.deepEqual(h.reloads,[7]);assert.equal(h.search().status,'loading');
 });
-test('falha aumenta 15 para 30 e 60; sucesso mantém intervalo mais estável',async()=>{
- const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Demora'});assert.equal(h.search().effectiveIntervalSeconds,30);
- await h.content('RETRY',{message:'Demora'});assert.equal(h.search().effectiveIntervalSeconds,60);
- await h.content('SCAN_COMPLETE');assert.equal(h.search().effectiveIntervalSeconds,60);assert.equal(h.search().failures,0);
+test('falhas não aumentam o intervalo escolhido',async()=>{
+ const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Demora'});assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
+ await h.content('RETRY',{message:'Demora'});assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);assert.match(h.search().resultMessage,/Nova tentativa em 15 s/);
+ await h.content('SCAN_COMPLETE');assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);assert.equal(h.search().failures,0);
+});
+test('intervalo de 5 segundos é respeitado após leitura e após erro',async()=>{
+ const h=harness();await h.start({intervalSeconds:5});const reply=await h.content('SCAN_COMPLETE');
+ assert.equal(reply.nextRefreshAt-h.search().updatedAt,5000);h.advance(5000);await h.content('REFRESH_DUE');assert.deepEqual(h.reloads,[7]);
+ await h.content('PHASE',{status:'scanning'});await h.content('RETRY',{message:'Demora'});assert.equal(h.search().nextRefreshAt-h.search().updatedAt,5000);
 });
 test('monitor sem resposta não finge que fez a leitura',async()=>{const h=harness();h.setAck(null);await h.start();assert.equal(h.search().checks,0);assert.equal(h.search().failures,1);assert.equal(h.search().status,'monitoring');});
 test('leitura sem vaga agenda nova recarga e registra verificação',async()=>{
@@ -56,7 +61,7 @@ test('aviso sem datas mantém recargas normais por mais de quatro ciclos sem pau
   await h.content('PHASE',{status:'scanning'});
   const reply=await h.content('SCAN_COMPLETE',{months:[],message:'Sem datas disponíveis para este endereço.'});
   assert.equal(reply.nextRefreshAt-h.search().updatedAt,15000);
-  assert.equal(h.search().failures,0);assert.equal(h.search().effectiveIntervalSeconds,15);
+  assert.equal(h.search().failures,0);
   assert.equal(h.search().status,'monitoring');assert.equal(h.search().checks,cycle+1);
   h.advance(15000);await h.content('REFRESH_DUE');assert.equal(h.reloads.length,cycle+1);
  }
@@ -67,13 +72,13 @@ test('data encontrada interrompe alarmes e preserva a reserva',async()=>{
 test('data fora do intervalo não é aceita como resultado',async()=>{
   const h=harness();await h.start();assert.equal((await h.content('FOUND_DATE',{date:'2026-10-26'})).ok,false);assert.equal(h.search().status,'scanning');
 });
-test('falhas temporárias continuam recarregando além de quatro tentativas com espera limitada',async()=>{
+test('falhas temporárias continuam recarregando além de quatro tentativas no intervalo escolhido',async()=>{
  const h=harness();await h.start({intervalSeconds:15});
  for(let i=0;i<12;i++){
   await h.content('RETRY',{message:'Página incompleta'});
   assert.equal(h.search().status,'monitoring');assert.equal(h.search().running,true);
   assert.equal(h.search().failures,i+1);assert.equal(h.search().checks,0);
-  assert.equal(h.search().effectiveIntervalSeconds,Math.min(15*2**(i+1),900));
+  assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
   await h.fire();assert.equal(h.reloads.length,i+1);
   await h.content('PHASE',{status:'scanning'});
  }
@@ -138,7 +143,7 @@ test('aba em loading com calendário reconhecido mantém ciclos de 15 s sem fals
  const h=harness();await h.start({intervalSeconds:15});h.tab.status='loading';
  for(let i=0;i<5;i++){
   await h.content('SCAN_COMPLETE');h.advance(15000);await h.content('REFRESH_DUE');
-  assert.equal(h.search().status,'loading');assert.equal(h.search().failures,0);assert.equal(h.search().effectiveIntervalSeconds,15);
+  assert.equal(h.search().status,'loading');assert.equal(h.search().failures,0);
   await h.content('PHASE',{status:'scanning'});
  }
  assert.equal(h.reloads.length,5);assert.equal(h.notifications.length,0);
@@ -155,12 +160,12 @@ test('Gestão reconhecida recupera mesmo quando o navegador ainda informa loadin
 test('watchdog retoma leitura pronta durante loading sem aumentar intervalo',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await h.content('SCAN_COMPLETE');await h.fire();h.tab.status='loading';
  await h.fire();assert.equal(h.search().status,'scanning');assert.equal(h.messages.at(-1).type,'SCAN');
- assert.equal(h.search().failures,0);assert.equal(h.search().effectiveIntervalSeconds,15);assert.equal(h.reloads.length,1);
+ assert.equal(h.search().failures,0);assert.equal(h.reloads.length,1);
 });
 
-test('carregamento sem formulário continua usando espera progressiva',async()=>{
+test('carregamento sem formulário tenta de novo no intervalo escolhido',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await h.content('SCAN_COMPLETE');h.tab.status='loading';h.setPage(null);
- await h.fire();assert.equal(h.search().failures,1);assert.equal(h.search().effectiveIntervalSeconds,30);
+ await h.fire();assert.equal(h.search().failures,1);assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
  assert.equal(h.search().status,'monitoring');assert.equal(h.reloads.length,0);
 });
 
@@ -176,57 +181,45 @@ async function cleanCheck(h) {
  return h.content('SCAN_COMPLETE',{message:'Sem vaga'});
 }
 
-test('agendador reduz após 20 ciclos completos simulados e devolve ao timer o novo prazo',async()=>{
- const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Erro'});await h.content('RETRY',{message:'Erro'});
- for(let i=0;i<19;i++)await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,60);
- const reply=await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,30);
- assert.equal(reply.nextRefreshAt-h.search().updatedAt,30000);
- for(let i=0;i<20;i++)await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,15);
- assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
- assert.equal(h.notifications.length,0);
+test('intervalo escolhido não muda após erros e muitos ciclos completos',async()=>{
+ const h=harness();await h.start({intervalSeconds:10});await h.content('RETRY',{message:'Erro'});await h.content('RETRY',{message:'Erro'});
+ for(let i=0;i<40;i++){const reply=await cleanCheck(h);assert.equal(reply.nextRefreshAt-h.search().updatedAt,10000);}
+ assert.equal(h.search().checks,40);assert.equal(h.notifications.length,0);
 });
 
-test('retorno da Gestão aumenta uma vez e não conta as etapas como leituras estáveis',async()=>{
+test('retorno da Gestão não altera o intervalo e conta uma única leitura',async()=>{
  const h=harness();await h.start({intervalSeconds:15});
  for(const step of ['error','management','preparation'])await h.content('PHASE',{status:'recovering',step});
  await h.content('PHASE',{status:'scanning'});await h.content('SCAN_COMPLETE');
- assert.equal(h.search().effectiveIntervalSeconds,30);assert.equal(h.search().cadence.stableChecks,0);assert.equal(h.search().checks,1);
- await cleanCheck(h);assert.equal(h.search().cadence.stableChecks,1);
+ assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);assert.equal(h.search().checks,1);
+ await cleanCheck(h);assert.equal(h.search().checks,2);
 });
 
-test('recuperação que já teve RETRY não aumenta novamente ao concluir',async()=>{
+test('recuperação que teve RETRY mantém o intervalo ao concluir',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await h.content('PHASE',{status:'recovering',step:'management'});
  await h.content('RETRY',{message:'Lista atrasada'});await h.content('PHASE',{status:'recovering',step:'preparation'});await h.content('SCAN_COMPLETE');
- assert.equal(h.search().effectiveIntervalSeconds,30);assert.equal(h.search().cadence.stableChecks,0);
+ assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
 });
 
-test('evento de conclusão duplicado não aumenta verificações nem adianta redução',async()=>{
+test('evento de conclusão duplicado não aumenta verificações nem altera a busca',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Erro'});await cleanCheck(h);
  const before=structuredClone(h.search());
  for(let i=0;i<25;i++)assert.equal((await h.content('SCAN_COMPLETE')).ok,false);
  assert.deepEqual(h.search(),before);
 });
 
-test('falha ao experimentar 15 segundos exige 40 ciclos antes da nova tentativa',async()=>{
+test('reinício do worker mantém o intervalo escolhido, inclusive em busca salva pela versão anterior',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Erro'});
- for(let i=0;i<20;i++)await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,15);
- for(let i=0;i<4;i++)await cleanCheck(h);
- await h.fire();await h.content('RETRY',{message:'Erro ao acelerar'});assert.equal(h.search().effectiveIntervalSeconds,30);
- for(let i=0;i<39;i++)await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,30);
- await cleanCheck(h);assert.equal(h.search().effectiveIntervalSeconds,15);
+ for(let i=0;i<3;i++)await cleanCheck(h);
+ // Versão anterior gravava um intervalo efetivo maior após erros.
+ Object.assign(h.search(),{effectiveIntervalSeconds:60,cadence:{version:1,intervalSeconds:60,stableChecks:3,penalties:{}}});
+ const resumed=harness(h.state);await resumed.listeners.startup();
+ assert.equal(resumed.search().nextRefreshAt-resumed.search().updatedAt,15000);
+ await cleanCheck(resumed);assert.equal(resumed.search().nextRefreshAt-resumed.search().updatedAt,15000);
 });
 
-test('reinício do worker preserva sequência estável e busca antiga sem cadência é compatível',async()=>{
- const h=harness();await h.start({intervalSeconds:15});await h.content('RETRY',{message:'Erro'});
- for(let i=0;i<19;i++)await cleanCheck(h);
- const resumed=harness(h.state);await resumed.listeners.startup();await cleanCheck(resumed);
- assert.equal(resumed.search().effectiveIntervalSeconds,15);
- delete resumed.search().cadence;delete resumed.search().cycleSampled;await resumed.content('SCAN_COMPLETE');
- assert.equal(resumed.search().effectiveIntervalSeconds,15);
-});
-
-test('recuperação depois de uma leitura encerrada também inicia novo ciclo instável',async()=>{
+test('recuperação depois de uma leitura encerrada inicia novo ciclo sem mudar o intervalo',async()=>{
  const h=harness();await h.start({intervalSeconds:15});await cleanCheck(h);
  await h.content('PHASE',{status:'recovering',step:'management'});await h.content('PHASE',{status:'scanning'});await h.content('SCAN_COMPLETE');
- assert.equal(h.search().checks,2);assert.equal(h.search().effectiveIntervalSeconds,30);assert.equal(h.search().cadence.stableChecks,0);
+ assert.equal(h.search().checks,2);assert.equal(h.search().nextRefreshAt-h.search().updatedAt,15000);
 });

@@ -30,7 +30,9 @@ test('reconhece texto da data e rejeita ano explícito diferente',()=>{
   assert.equal(C.labelMatchesDate('21 de outubro de 2027','2026-10-21'),false);
   assert.equal(C.labelMatchesDate('22 de outubro','2026-10-21'),false);
 });
-test('espera cresce e fica limitada',()=>{
-  assert.equal(C.retrySeconds(90,1),180);
-  assert.equal(C.retrySeconds(300,4),900);
+test('intervalo escolhido vai de 5 em 5 segundos, entre 5 e 30',()=>{
+  assert.deepEqual([5,10,15,20,25,30].map(C.intervalSeconds),[5,10,15,20,25,30]);
+  assert.equal(C.intervalSeconds(1),5);assert.equal(C.intervalSeconds(8),10);assert.equal(C.intervalSeconds(90),30);
+  assert.equal(C.intervalSeconds(undefined),15);assert.equal(C.intervalSeconds('abc'),15);
+  assert.equal(C.normalizeConfig({intervalSeconds:300}).intervalSeconds,30);
 });
