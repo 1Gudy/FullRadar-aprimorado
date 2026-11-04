@@ -147,7 +147,15 @@ async function handleContentEvent(message, sender) {
         search.status = message.status;
         search.recoveryStep = message.step || "";
         if (message.date) search.foundDate = message.date;
-        if (message.status === "recovering" && ++search.recoveryHops > 8) { await pause(tabId, search, "A recuperação entrou em repetição. Confira a página e retome."); return { ok: false }; }
+        if (message.status === "recovering" && ++search.recoveryHops > 8) {
+          // Não desistir: encerrar só esta tentativa e recomeçar do zero, com a aba recarregada.
+          search.recoveryLoops = (search.recoveryLoops || 0) + 1;
+          search.forceReload = true;
+          await sendToTab(tabId, { type: "STOP_SCAN" });
+          await appendErrorLog({ source: "Monitor", stage: search.recoveryStep || "recuperação", message: "A recuperação entrou em repetição. Recomeçando a tentativa.", severity: "warning" });
+          await retry(tabId, search, `A recuperação entrou em repetição (${search.recoveryLoops}ª vez). Recomeçando com a página recarregada.`);
+          return { ok: false };
+        }
         await schedule(tabId, search, message.status === "recovering" ? 90 : 60);
         return { ok: true };
       }
@@ -161,6 +169,7 @@ async function handleContentEvent(message, sender) {
         search.checks++;
         search.failures = 0;
         search.recoveryHops = 0;
+        search.recoveryLoops = 0;
         search.resultMessage = message.message;
         search.monthsChecked = message.months || [];
         await schedule(tabId, search, intervalOf(search));
@@ -227,7 +236,7 @@ async function processDeadline(tabId, search) {
     const page = await sendToTab(tabId, { type: "PAGE_INFO" });
     if (page?.challenge) { await pause(tabId, search, page.message); return; }
     if (["scanning", "recovering"].includes(search.status)) { await sendToTab(tabId, { type: "STOP_SCAN" }); await retry(tabId, search, "A leitura não terminou no prazo. Aguardando antes de tentar novamente."); return; }
-    if (page?.recoveryStep) { await dispatchScan(tabId, search); return; }
+    if (page?.recoveryStep && !search.forceReload) { await dispatchScan(tabId, search); return; }
     if (page?.schedulePage && search.status === "loading") { await dispatchScan(tabId, search); return; }
     // Recursos secundários podem manter a aba em "loading" com o formulário pronto.
     // A leitura do DOM decide se já podemos recuperar/verificar ou iniciar outro ciclo.
@@ -239,6 +248,7 @@ async function processDeadline(tabId, search) {
     }
     if (search.status === "loading") { await retry(tabId, search, "O monitor não retomou após carregar a página."); return; }
     search.status = "loading";
+    search.forceReload = false;
     beginCycle(search);
     search.lastRefreshAt = Date.now();
     await schedule(tabId, search, 60);

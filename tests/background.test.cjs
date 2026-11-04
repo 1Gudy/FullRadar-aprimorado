@@ -107,6 +107,22 @@ test('falhas temporárias continuam recarregando além de quatro tentativas no i
  await h.call({type:'STOP_SEARCH',tabId:7});assert.equal(h.alarms.size,0);
  assert.equal((await h.content('REFRESH_DUE')).ok,false);assert.equal(h.reloads.length,12);
 });
+test('recuperação em repetição não pausa: recomeça recarregando a aba e continua em loop',async()=>{
+ const h=harness();await h.start({intervalSeconds:5});
+ h.tab.url='https://vendedores.mercadolivre.com.br/shipping/inbounds';h.setPage({schedulePage:false,recoveryStep:'management',shipmentId:''});
+ for(let round=1;round<=3;round++){
+  let reply;for(let i=0;i<9;i++)reply=await h.content('PHASE',{status:'recovering',step:i%2?'preparation':'management'});
+  assert.equal(reply.ok,false);assert.equal(h.search().status,'monitoring');assert.equal(h.search().running,true);
+  assert.equal(h.search().recoveryLoops,round);assert.equal(h.search().recoveryHops,0);
+  assert.match(h.search().resultMessage,/repetição.*Recomeçando/);assert.equal(h.notifications.length,0);
+  assert.equal(h.messages.at(-1).type,'STOP_SCAN');assert.equal(h.search().nextRefreshAt-h.search().updatedAt,5000);
+  // No prazo, recarrega a aba em vez de continuar a recuperação travada.
+  await h.fire();assert.equal(h.reloads.length,round);assert.equal(h.search().status,'loading');assert.equal(h.search().forceReload,false);
+  await h.content('PHASE',{status:'scanning'});
+ }
+ h.setPage({schedulePage:true,supported:true,shipmentId:'12345678',version:'0.2.0'});
+ await h.content('SCAN_COMPLETE');assert.equal(h.search().recoveryLoops,0);assert.equal(h.search().status,'monitoring');
+});
 test('tentativa de recuperação após espera reinicia limite de etapas sem pausar a busca inteira',async()=>{
  const h=harness();await h.start({intervalSeconds:15});
  for(let attempt=0;attempt<5;attempt++){
